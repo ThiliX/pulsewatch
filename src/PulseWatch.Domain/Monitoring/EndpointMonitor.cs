@@ -91,6 +91,100 @@ public sealed class EndpointMonitor
     public bool IsExpectedStatus(int statusCode) =>
         statusCode >= ExpectedStatusMin && statusCode <= ExpectedStatusMax;
 
+    /// <summary>
+    /// True when an enabled monitor has not produced a result for over two intervals plus a minute,
+    /// which means the worker is behind or not running. The UI must not present stale data as current.
+    /// </summary>
+    public bool IsStale(DateTimeOffset nowUtc)
+    {
+        if (!IsEnabled)
+        {
+            return false;
+        }
+
+        var reference = LastCheckedAtUtc ?? CreatedAtUtc;
+        return nowUtc - reference > StaleAfter;
+    }
+
+    private TimeSpan StaleAfter => TimeSpan.FromSeconds((2 * IntervalSeconds) + 60);
+
+    /// <summary>
+    /// Changes the name, URL and check settings. Changing the URL resets the health counters and
+    /// the last result, because they described the old URL, and schedules a check right away.
+    /// An open incident stays open until the monitor recovers.
+    /// </summary>
+    public void UpdateDetails(string name, string url, MonitorSettings settings, bool hasOpenIncident, DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        Guard.Utc(nowUtc);
+        settings.Validate();
+        var newName = Guard.Text(name, MonitorLimits.NameMaxLength);
+        var newUrl = MonitorUrl.Normalize(url);
+
+        var urlChanged = !string.Equals(newUrl, Url, StringComparison.Ordinal);
+        var intervalChanged = settings.IntervalSeconds != IntervalSeconds;
+
+        Name = newName;
+        Url = newUrl;
+        IntervalSeconds = settings.IntervalSeconds;
+        TimeoutMs = settings.TimeoutMs;
+        FailureThreshold = settings.FailureThreshold;
+        RecoveryThreshold = settings.RecoveryThreshold;
+        ExpectedStatusMin = settings.ExpectedStatusMin;
+        ExpectedStatusMax = settings.ExpectedStatusMax;
+        UpdatedAtUtc = nowUtc;
+
+        if (urlChanged)
+        {
+            ConsecutiveFailures = 0;
+            ConsecutiveSuccesses = 0;
+            StreakStartedAtUtc = null;
+            LastCheckedAtUtc = null;
+            LastOutcome = null;
+            LastStatusCode = null;
+            LastDurationMs = null;
+            NextCheckAtUtc = nowUtc;
+            if (IsEnabled)
+            {
+                State = hasOpenIncident ? MonitorState.Down : MonitorState.Unknown;
+            }
+        }
+        else if (intervalChanged)
+        {
+            // Due one new interval after the last check; that may already be in the past (due now).
+            NextCheckAtUtc = LastCheckedAtUtc is { } last ? last.AddSeconds(IntervalSeconds) : nowUtc;
+        }
+    }
+
+    /// <summary>
+    /// Asks for a check as soon as possible. Returns false (and changes nothing) when the previous
+    /// request was less than <paramref name="cooldown"/> ago; <paramref name="retryAfter"/> says how long to wait.
+    /// </summary>
+    public bool TryRequestManualCheck(DateTimeOffset nowUtc, TimeSpan cooldown, out TimeSpan retryAfter)
+    {
+        Guard.Utc(nowUtc);
+        if (!IsEnabled)
+        {
+            throw new DomainException("A paused monitor cannot be checked. Resume it first.");
+        }
+
+        if (ManualCheckRequestedAtUtc is { } previous && nowUtc - previous < cooldown)
+        {
+            retryAfter = cooldown - (nowUtc - previous);
+            return false;
+        }
+
+        ManualCheckRequestedAtUtc = nowUtc;
+        if (NextCheckAtUtc > nowUtc)
+        {
+            NextCheckAtUtc = nowUtc;
+        }
+
+        UpdatedAtUtc = nowUtc;
+        retryAfter = TimeSpan.Zero;
+        return true;
+    }
+
     /// <summary>Stops scheduled checks. Idempotent. An open incident stays open.</summary>
     public void Pause(DateTimeOffset nowUtc)
     {
@@ -219,6 +313,25 @@ public sealed class EndpointMonitor
         State = MonitorState.Degraded;
         return CheckEvaluation.NoChange(null);
     }
+
+    /// <summary>
+    /// Called after a scheduled check's result is recorded: schedules the next check one interval after
+    /// this check started and releases the worker's lease. If the owner asked for a manual check while
+    /// this one was running, the next check stays due immediately.
+    /// </summary>
+    public void CompleteCheck(DateTimeOffset checkStartedAtUtc, DateTimeOffset nowUtc)
+    {
+        Guard.Utc(checkStartedAtUtc);
+        Guard.Utc(nowUtc);
+
+        var manualRequestedDuringCheck = ManualCheckRequestedAtUtc is { } requested && requested > checkStartedAtUtc;
+        var next = checkStartedAtUtc.AddSeconds(IntervalSeconds);
+        NextCheckAtUtc = manualRequestedDuringCheck ? nowUtc : (next > nowUtc ? next : nowUtc);
+        LeaseUntilUtc = null;
+    }
+
+    /// <summary>Gives up the worker's claim without recording a result (e.g. the URL changed mid-check).</summary>
+    public void ReleaseLease() => LeaseUntilUtc = null;
 
     private static int SaturatingIncrement(int value) => value == int.MaxValue ? value : value + 1;
 }

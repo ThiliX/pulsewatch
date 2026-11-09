@@ -4,7 +4,7 @@
 
 PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a schedule, records status and response time, opens an incident when failures persist, emails you when it starts and when it recovers, and shows the history in a dashboard.
 
-> **Status: Milestone 1 (domain and database).** The domain model, incident state machine and PostgreSQL schema are in place and tested. Sign-in, the monitor API, the probe engine, alerts and the real dashboard are **not built yet**. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
+> **Status: Milestone 3 (probe engine and scheduler).** The worker now checks your monitors on schedule, records every result and opens incidents after repeated failures. Incident endpoints, email alerts and the real dashboard come in Milestones 4–6. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
 
 ## What works today
 
@@ -14,11 +14,16 @@ PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a
 | Domain model: monitors, checks, incidents, notification outbox | ✅ with the incident state machine (failure/recovery thresholds) unit-tested |
 | PostgreSQL schema via EF Core migrations | ✅ CHECK constraints, cascades, one-open-incident-per-monitor unique index |
 | API `/health/live` and `/health/ready` | ✅ readiness checks the database is reachable and fully migrated |
-| Worker host | ✅ starts, logs a heartbeat, shuts down cleanly |
+| Accounts: register, sign in/out, `/me` | ✅ ASP.NET Core Identity, HttpOnly SameSite=Strict cookie, anti-forgery header, lockout, rate limits |
+| Monitor API: list, create, get, edit, pause, resume, check-now, delete | ✅ every query scoped to the signed-in user; quota; optimistic concurrency (ETag / If-Match) |
+| URL safety (SSRF layers 1–2) | ✅ http/https only, no credentials, allowed ports, local host names blocked, every DNS answer must be public |
+| Worker: scheduled checks | ✅ leases due monitors (`FOR UPDATE SKIP LOCKED`), probes with bounded concurrency, records one result per attempt, updates health, opens incidents, writes a heartbeat |
+| Probe engine | ✅ one GET per check (no retries), overall timeout, capped body read, manual redirects re-validated each hop, categorised outcomes |
+| SSRF layer 3 (connect-time check) | ✅ the probe resolves and checks the host itself and connects only to the address it checked, which blocks DNS rebinding |
 | PostgreSQL + Mailpit via Docker Compose | ✅ |
 | React frontend shell | ✅ shows whether the API is reachable |
 | CI (format, build, test for .NET and React) | ✅ workflow defined |
-| Sign-in, monitor API, probing, alerts, dashboard | ⏳ Milestones 2–6 |
+| Incident endpoints, email alerts, dashboard | ⏳ Milestones 4–6 |
 
 ## Architecture
 
@@ -89,7 +94,9 @@ dotnet run --project src/PulseWatch.Api       # http://localhost:5080
 dotnet run --project src/PulseWatch.Worker
 ```
 
-Check the API: <http://localhost:5080/health/live> and <http://localhost:5080/health/ready> should both return `Healthy`. Ready returns `Unhealthy` (HTTP 503) if the database is down or migrations are pending. The OpenAPI document is at <http://localhost:5080/openapi/v1.json> (Development only).
+Check the API: <http://localhost:5080/health/live> and <http://localhost:5080/health/ready> should both return `Healthy`. Ready returns `Unhealthy` (HTTP 503) if the database is down or migrations are pending.
+
+API reference (Development only): interactive docs at <http://localhost:5080/scalar>, OpenAPI JSON at <http://localhost:5080/openapi/v1.json>.
 
 ### 4. Run the frontend
 
@@ -100,6 +107,35 @@ npm run dev                                    # http://localhost:5173
 ```
 
 The Vite dev server forwards `/api` and `/health` to the API on port 5080, so the browser sees one origin. Set `PULSEWATCH_API_URL` to point it elsewhere.
+
+## Using the API
+
+All endpoints are under `/api/v1`. Errors use [Problem Details](https://www.rfc-editor.org/rfc/rfc9457); validation errors list the failing fields.
+
+1. `GET /api/v1/auth/antiforgery` sets an `XSRF-TOKEN` cookie.
+2. Send that cookie's value in the `X-XSRF-TOKEN` header on **every** POST, PATCH and DELETE. A fresh token is issued after sign-in and sign-out.
+3. `POST /api/v1/auth/register` or `/login` with `{ "email": "...", "password": "..." }` sets the HttpOnly `pw.auth` cookie. Passwords need at least 12 characters.
+4. Manage monitors: `GET/POST /api/v1/monitors`, `GET/PATCH/DELETE /api/v1/monitors/{id}`, `POST .../pause`, `.../resume`, `.../check-now`.
+
+Rules worth knowing:
+- Another user's monitor id returns the same `404` as an id that doesn't exist.
+- Monitor URLs must point to a public destination. Local names (`localhost`, `*.local`, `*.internal`, …), private/reserved IPs and host names whose DNS answers include any non-public address are rejected.
+- `PATCH` changes only the fields you send. Send `If-Match: <ETag>` to get `412` instead of overwriting a newer change.
+- `check-now` returns `202` and is limited to once per minute per monitor (`429` with `Retry-After`). The worker runs the check on its next poll (within about 5 seconds).
+
+## How checks work
+
+The worker (`src/PulseWatch.Worker`) polls every `Monitoring:PollIntervalSeconds` (5 s):
+
+1. It **leases** up to `BatchSize` (50) enabled monitors that are due, in one SQL statement (`FOR UPDATE SKIP LOCKED`). A leased monitor can't be picked up by another worker until its result is recorded or the lease expires (probe timeout + 30 s), so a crashed worker never leaves a monitor stuck.
+2. It **probes** them, at most `MaxConcurrentChecks` (10) at a time. Each probe is one `GET` with the monitor's timeout covering everything, no cookies or credentials, at most `MaxRedirects` (3) redirects (each re-validated), and at most `MaxResponseBytes` (64 KB) of body read.
+3. It **records** each result in one transaction: the check row, the monitor's state and counters, an incident if the failure threshold is reached, and the next check time (one interval after this check started).
+
+Outcomes: `Success`, `HttpStatusFailure`, `Timeout`, `DnsFailure`, `TlsFailure`, `ConnectionFailure`, `RedirectRejected`, `DestinationBlocked`, `UnexpectedError`. Stored error summaries are fixed text, never exception messages or response content.
+
+Scheduling tolerance: a check runs within about one poll interval of its due time, plus queueing when more than `MaxConcurrentChecks` monitors are due together. A failed or slow monitor never blocks the others. On shutdown the worker stops claiming and lets in-flight checks finish (up to 30 s).
+
+Results describe what the worker saw from **its** network location, not what every user everywhere sees.
 
 ## Database migrations
 
@@ -152,6 +188,7 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - Never commit real credentials. `.env` is git-ignored; `.env.example` holds placeholders only.
 - For `dotnet run`, keep the connection string in user-secrets (see Getting started, step 2). In containers or servers, use the `ConnectionStrings__PulseWatch` environment variable.
 - If the connection string is missing, the API stops at startup with a message saying how to set it.
+- Rate limits (section `RateLimiting`, per minute): `AuthPermitsPerMinute` 10 per IP, `WritePermitsPerMinute` 30 per user, `CheckNowPermitsPerMinute` 10 per user.
 - Monitoring settings (section `Monitoring`) are validated at startup. They can only narrow the hard limits in `MonitorLimits` (e.g. interval 60–3600 s), which the database also enforces.
 
 - The full list of settings is in [IMPLEMENTATION_PLAN.md §8](IMPLEMENTATION_PLAN.md#8-configuration).
@@ -163,12 +200,18 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - Package versions live in one place: `Directory.Packages.props` (central package management).
 - **EF Core 10.0.11** with **Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3** and snake_case naming (EFCore.NamingConventions).
 - **xUnit v3** with Microsoft.Testing.Platform; **Testcontainers 4.16** for database tests.
+- **Scalar.AspNetCore 2.18.7** for the Development API reference page.
 - **PostgreSQL 18.6** (Alpine image) and **Mailpit 1.33.1** in Docker Compose.
 - Frontend: **React 19, Vite 8, TypeScript 7, Tailwind CSS 4, React Router 8, Vitest 5**. Linting uses **oxlint**, which the current Vite template ships with, instead of ESLint.
 
 ## Known limitations
 
-Nothing is monitored yet: there is no sign-in, no monitor API and no probe engine. Do not deploy it publicly.
+- Do not deploy publicly until the release checklist in Milestone 8 passes. In particular, the outbound firewall for the worker (SSRF layer 4) is a deployment step that isn't done yet.
+- Several workers can run safely (claiming is tested with 8 concurrent claimers), but run **one worker** until you have tested multiple replicas in your own deployment.
+- If an edit to a monitor lands at the exact moment the worker claims or records it, the edit gets `412` ("changed by another request") and must be retried.
+- Registration reveals whether an email is already registered (there is no email confirmation). The per-IP auth rate limit slows bulk checking.
+- Rate limits use the client IP; behind a reverse proxy, forwarded headers must be configured first (Milestone 8).
+- Data-protection keys (which sign the auth cookie) use the ASP.NET Core default store; in containers they must be persisted or users are signed out on restart (Milestone 8).
 
 ## License
 
