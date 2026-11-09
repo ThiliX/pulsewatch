@@ -1,46 +1,13 @@
-using PulseWatch.Application.Options;
-using PulseWatch.Infrastructure.Network;
-using PulseWatch.Infrastructure.Persistence;
-using PulseWatch.Infrastructure.Probing;
-using PulseWatch.Infrastructure.Scheduling;
-using PulseWatch.Worker;
+namespace PulseWatch.Worker;
 
-var builder = Host.CreateApplicationBuilder(args);
-
-builder.Services.AddPulseWatchWorker(builder.Configuration);
-
-var host = builder.Build();
-host.Run();
-
-namespace PulseWatch.Worker
+// An explicit entry point (instead of top-level statements) keeps this class out of the global
+// namespace, where it would clash with the API's Program in the integration tests.
+internal static class WorkerProgram
 {
-    public static class WorkerSetup
+    private static void Main(string[] args)
     {
-        /// <summary>Everything the worker host needs. Shared with the integration tests.</summary>
-        public static IServiceCollection AddPulseWatchWorker(this IServiceCollection services, IConfiguration configuration)
-        {
-            services.AddSingleton(TimeProvider.System);
-
-            services.AddOptions<MonitoringOptions>()
-                .Bind(configuration.GetSection(MonitoringOptions.SectionName))
-                .ValidateDataAnnotations()
-                .ValidateOnStart();
-            services.AddOptions<HeartbeatOptions>()
-                .Bind(configuration.GetSection(HeartbeatOptions.SectionName))
-                .ValidateDataAnnotations()
-                .ValidateOnStart();
-
-            services.AddPulseWatchPersistence(configuration);
-            services.AddPulseWatchNetwork();
-            services.AddPulseWatchProbing();
-            services.AddPulseWatchScheduling();
-
-            services.AddHostedService<HeartbeatService>();
-            services.AddHostedService<SchedulerService>();
-
-            // In-flight checks get time to finish and be recorded (probe timeout is at most 15 s).
-            services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
-            return services;
-        }
+        var builder = Host.CreateApplicationBuilder(args);
+        builder.Services.AddPulseWatchWorker(builder.Configuration);
+        builder.Build().Run();
     }
 }

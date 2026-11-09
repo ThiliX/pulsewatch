@@ -4,7 +4,7 @@
 
 PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a schedule, records status and response time, opens an incident when failures persist, emails you when it starts and when it recovers, and shows the history in a dashboard.
 
-> **Status: Milestone 4 (incidents end to end).** The worker checks your monitors on schedule, opens an incident after repeated failures and resolves it on recovery; check history and incidents are available through the API. Email alerts and the real dashboard come in Milestones 5–6. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
+> **Status: Milestone 5 (email alerts).** The worker checks your monitors on schedule, opens an incident after repeated failures, resolves it on recovery, and emails the owner when an incident opens and when it recovers. Check history, incidents and email delivery status are available through the API. The real dashboard comes in Milestone 6. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
 
 ## What works today
 
@@ -24,7 +24,8 @@ PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a
 | React frontend shell | ✅ shows whether the API is reachable |
 | CI (format, build, test for .NET and React) | ✅ workflow defined |
 | Check history and incidents API | ✅ per-monitor check history (time window, paged), per-monitor and global incident lists, incident details with notification history |
-| Email alerts, dashboard | ⏳ Milestones 5–6 |
+| Email alerts | ✅ one email when an incident opens and one when it recovers, written to an outbox in the same transaction as the incident; retries with backoff; delivery status on the incident |
+| Dashboard | ⏳ Milestone 6 |
 
 ## Architecture
 
@@ -137,13 +138,43 @@ The worker (`src/PulseWatch.Worker`) polls every `Monitoring:PollIntervalSeconds
 
 1. It **leases** up to `BatchSize` (50) enabled monitors that are due, in one SQL statement (`FOR UPDATE SKIP LOCKED`). A leased monitor can't be picked up by another worker until its result is recorded or the lease expires (probe timeout + 30 s), so a crashed worker never leaves a monitor stuck.
 2. It **probes** them, at most `MaxConcurrentChecks` (10) at a time. Each probe is one `GET` with the monitor's timeout covering everything, no cookies or credentials, at most `MaxRedirects` (3) redirects (each re-validated), and at most `MaxResponseBytes` (64 KB) of body read.
-3. It **records** each result in one transaction: the check row, the monitor's state and counters, an incident if the failure threshold is reached, and the next check time (one interval after this check started).
+3. It **records** each result in one transaction: the check row, the monitor's state and counters, an incident if the failure threshold is reached (or its resolution), the alert email for that incident event (an outbox row), and the next check time (one interval after this check started).
 
 Outcomes: `Success`, `HttpStatusFailure`, `Timeout`, `DnsFailure`, `TlsFailure`, `ConnectionFailure`, `RedirectRejected`, `DestinationBlocked`, `UnexpectedError`. Stored error summaries are fixed text, never exception messages or response content.
 
 Scheduling tolerance: a check runs within about one poll interval of its due time, plus queueing when more than `MaxConcurrentChecks` monitors are due together. A failed or slow monitor never blocks the others. On shutdown the worker stops claiming and lets in-flight checks finish (up to 30 s).
 
 Results describe what the worker saw from **its** network location, not what every user everywhere sees.
+
+## How email alerts work
+
+The monitor's owner gets **one email when an incident opens** and **one when it recovers**. Nothing is sent for the failures in between.
+
+- **No lost alerts.** The email is queued in the `notification_outbox` table in the same transaction that opens or resolves the incident, so a committed incident always has its email queued. A unique key (incident, event, channel, recipient) prevents duplicates.
+- **Delivery.** The worker's outbox dispatcher polls every `Notifications:PollIntervalSeconds` (10 s), leases up to 20 due messages (`FOR UPDATE SKIP LOCKED`) and sends them.
+- **Retries.** A failed send is retried after about 30 s, 1, 2, 4 and 8 minutes (doubling, ±20 % jitter, at most 1 hour). After `Notifications:MaxAttempts` (6) attempts, or straight away for a rejected address, the message is marked **Exhausted**.
+- **Visible status.** `GET /api/v1/incidents/{id}` lists each email with its status (`Pending`, `Sending`, `Sent`, `Failed`, `Exhausted`), attempt count and an error category such as `ConnectionFailed` or `AuthenticationFailed`. Server replies and exception messages are never stored.
+- **Independent of checks.** A mail outage never delays or breaks check recording.
+- **Safe content.** Emails show the monitor name, the endpoint **without its query string** (query strings often hold API keys), what failed, UTC times and a link to the incident. Names are HTML-encoded, and line breaks are removed from the subject so they can't add mail headers.
+
+Delivery is **at least once**: if the worker stops after the mail server accepted an email but before it was marked Sent, that email is sent again after the lease expires.
+
+**Providers** (`Notifications:Provider`):
+
+- `Logging` (the default) writes each email to the worker log instead of sending it.
+- `Smtp` sends through the server in the `Email` section. To try it locally with Mailpit:
+
+  ```powershell
+  dotnet user-secrets set "Notifications:Provider" "Smtp" --project src/PulseWatch.Worker
+  dotnet user-secrets set "Email:Host" "localhost" --project src/PulseWatch.Worker
+  dotnet user-secrets set "Email:Port" "1025" --project src/PulseWatch.Worker
+  dotnet user-secrets set "Email:UseStartTls" "false" --project src/PulseWatch.Worker
+  dotnet user-secrets set "Email:FromAddress" "alerts@pulsewatch.localhost" --project src/PulseWatch.Worker
+  ```
+
+  Then open the inbox at <http://localhost:8025>. For a real provider, keep `UseStartTls` at `true` (the default) or use port 465, and put `Email:Username` and `Email:Password` in user-secrets or environment variables. PulseWatch never logs them.
+
+Links in emails point at `App:PublicBaseUrl` (default `http://localhost:5173`).
 
 ## Database migrations
 
@@ -197,6 +228,7 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - For `dotnet run`, keep the connection string in user-secrets (see Getting started, step 2). In containers or servers, use the `ConnectionStrings__PulseWatch` environment variable.
 - If the connection string is missing, the API stops at startup with a message saying how to set it.
 - Rate limits (section `RateLimiting`, per minute): `AuthPermitsPerMinute` 10 per IP, `WritePermitsPerMinute` 30 per user, `CheckNowPermitsPerMinute` 10 per user.
+- Notification settings (sections `Notifications`, `Email`, `App`) are validated when the worker starts. With `Provider` set to `Smtp`, `Email:Host` and `Email:FromAddress` are required.
 - Monitoring settings (section `Monitoring`) are validated at startup. They can only narrow the hard limits in `MonitorLimits` (e.g. interval 60–3600 s), which the database also enforces.
 
 - The full list of settings is in [IMPLEMENTATION_PLAN.md §8](IMPLEMENTATION_PLAN.md#8-configuration).
@@ -209,6 +241,7 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - **EF Core 10.0.11** with **Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3** and snake_case naming (EFCore.NamingConventions).
 - **xUnit v3** with Microsoft.Testing.Platform; **Testcontainers 4.16** for database tests.
 - **Scalar.AspNetCore 2.18.7** for the Development API reference page.
+- **MailKit 4.18.2** for SMTP.
 - **PostgreSQL 18.6** (Alpine image) and **Mailpit 1.33.1** in Docker Compose.
 - Frontend: **React 19, Vite 8, TypeScript 7, Tailwind CSS 4, React Router 8, Vitest 5**. Linting uses **oxlint**, which the current Vite template ships with, instead of ESLint.
 
@@ -217,6 +250,7 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - Do not deploy publicly until the release checklist in Milestone 8 passes. In particular, the outbound firewall for the worker (SSRF layer 4) is a deployment step that isn't done yet.
 - Several workers can run safely (claiming is tested with 8 concurrent claimers), but run **one worker** until you have tested multiple replicas in your own deployment.
 - If an edit to a monitor lands at the exact moment the worker claims or records it, the edit gets `412` ("changed by another request") and must be retried.
+- Alert emails are delivered at least once: in rare crash timing an email can arrive twice (see [How email alerts work](#how-email-alerts-work)). Alerts go only to the monitor's owner.
 - Registration reveals whether an email is already registered (there is no email confirmation). The per-IP auth rate limit slows bulk checking.
 - Rate limits use the client IP; behind a reverse proxy, forwarded headers must be configured first (Milestone 8).
 - Data-protection keys (which sign the auth cookie) use the ASP.NET Core default store; in containers they must be persisted or users are signed out on restart (Milestone 8).
