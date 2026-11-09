@@ -5,11 +5,17 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="EFCore.NamingConventions" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PulseWatch.Application\PulseWatch.Application.csproj" />
     <ProjectReference Include="..\PulseWatch.Domain\PulseWatch.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PulseWatch.UnitTests" />
+    <InternalsVisibleTo Include="PulseWatch.IntegrationTests" />
   </ItemGroup>
 
 </Project>
