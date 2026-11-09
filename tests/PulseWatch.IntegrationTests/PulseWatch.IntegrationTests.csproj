@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PulseWatch.Api\PulseWatch.Api.csproj" />
+    <ProjectReference Include="..\..\src\PulseWatch.Worker\PulseWatch.Worker.csproj" />
+    <ProjectReference Include="..\..\src\PulseWatch.Infrastructure\PulseWatch.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <UserSecretsId>pulsewatch-worker-c97993a6-9057-4f77-adf7-527515c0d5c6</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PulseWatch.Application\PulseWatch.Application.csproj" />
+    <ProjectReference Include="..\PulseWatch.Infrastructure\PulseWatch.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
