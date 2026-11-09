@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using PulseWatch.Api.Auth;
+using PulseWatch.Api.Dashboard;
 using PulseWatch.Api.Errors;
 using PulseWatch.Api.Health;
 using PulseWatch.Api.Incidents;
@@ -13,6 +14,7 @@ using PulseWatch.Api.Startup;
 using PulseWatch.Application.Monitors;
 using PulseWatch.Application.Options;
 using PulseWatch.Application.Security;
+using PulseWatch.Infrastructure.Metrics;
 using PulseWatch.Infrastructure.Network;
 using PulseWatch.Infrastructure.Persistence;
 using Scalar.AspNetCore;
@@ -28,6 +30,7 @@ builder.Services
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddPulseWatchPersistence(builder.Configuration);
 builder.Services.AddPulseWatchNetwork();
+builder.Services.AddScoped<MonitorMetricsQueries>();
 builder.Services.AddSingleton<IDestinationValidator>(sp => new DestinationValidator(
     sp.GetRequiredService<IDnsResolver>(),
     sp.GetRequiredService<IOptions<MonitoringOptions>>().Value.AllowedPorts));
@@ -84,6 +87,7 @@ app.MapAuthEndpoints();
 app.MapMonitorEndpoints();
 app.MapMonitorHistoryEndpoints();
 app.MapIncidentEndpoints();
+app.MapDashboardEndpoints();
 
 await app.RunAsync();
 return 0;

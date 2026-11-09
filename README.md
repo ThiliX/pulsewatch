@@ -4,7 +4,7 @@
 
 PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a schedule, records status and response time, opens an incident when failures persist, emails you when it starts and when it recovers, and shows the history in a dashboard.
 
-> **Status: Milestone 5 (email alerts).** The worker checks your monitors on schedule, opens an incident after repeated failures, resolves it on recovery, and emails the owner when an incident opens and when it recovers. Check history, incidents and email delivery status are available through the API. The real dashboard comes in Milestone 6. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
+> **Status: Milestone 6 (web app).** Sign up in the browser, add monitors, and watch their state, uptime, response times, check history and incidents. PulseWatch emails you when an incident opens and when it recovers. Metrics for operators, retention cleanup and the production release come in Milestones 7–8. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
 
 ## What works today
 
@@ -21,11 +21,11 @@ PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a
 | Probe engine | ✅ one GET per check (no retries), overall timeout, capped body read, manual redirects re-validated each hop, categorised outcomes |
 | SSRF layer 3 (connect-time check) | ✅ the probe resolves and checks the host itself and connects only to the address it checked, which blocks DNS rebinding |
 | PostgreSQL + Mailpit via Docker Compose | ✅ |
-| React frontend shell | ✅ shows whether the API is reachable |
 | CI (format, build, test for .NET and React) | ✅ workflow defined |
 | Check history and incidents API | ✅ per-monitor check history (time window, paged), per-monitor and global incident lists, incident details with notification history |
 | Email alerts | ✅ one email when an incident opens and one when it recovers, written to an outbox in the same transaction as the incident; retries with backoff; delivery status on the incident |
-| Dashboard | ⏳ Milestone 6 |
+| Web app | ✅ sign up / sign in; dashboard with summary counts, open incidents and a "worker offline" banner; monitor list (cards on phones, table on wider screens) with state filter; add/edit form with server errors shown on the fields; monitor page with uptime and p95 for 24 h / 7 d / 30 d, a response-time chart, check history and incidents; pause, resume, check now and delete with confirmation; incident list and detail with timeline and email delivery status |
+| Uptime, p95 and chart data | ✅ sampled uptime (never "100 %" without data), p95 of successful checks, bucketed chart series, dashboard summary |
 
 ## Architecture
 
@@ -108,7 +108,28 @@ npm install
 npm run dev                                    # http://localhost:5173
 ```
 
-The Vite dev server forwards `/api` and `/health` to the API on port 5080, so the browser sees one origin. Set `PULSEWATCH_API_URL` to point it elsewhere.
+Open <http://localhost:5173>, create an account and add a monitor. With the worker running, the first result appears within a few seconds.
+
+The Vite dev server forwards `/api` and `/health` to the API on port 5080, so the browser sees one origin and the auth cookie stays first-party. Set `PULSEWATCH_API_URL` to point it elsewhere.
+
+Frontend checks (the same ones CI runs):
+
+```powershell
+cd web
+npm run lint; npm run typecheck; npm test; npm run build
+```
+
+## Using the web app
+
+- **Dashboard**: counts of monitors by state, stale monitors and open incidents. A banner appears when the PulseWatch worker hasn't reported in for over a minute, so "my API is down" can be told apart from "PulseWatch's checker is down".
+- **Monitor page**:
+  - **Sampled uptime** is the share of checks that succeeded in the window, with the sample count beside it. A window without checks shows **No data**, never 100 %. Uptime is truncated, not rounded, so a single failure never shows as 100.00 %.
+  - **p95** covers successful checks only.
+  - The chart shows the average and maximum response time of successful checks, with failures as red bars.
+- **Freshness**: pages refresh every 30 seconds and show when they were last updated. If a refresh fails, they say so instead of presenting old data as current.
+- **Times** are shown in your time zone with its name; hover a time to see the exact UTC value.
+- **Accessibility**: every status badge has text and an icon, not just a colour. Everything works with the keyboard, and the delete dialog names the monitor and starts on Cancel.
+- **Privacy**: query strings in monitor URLs are hidden in lists and headers (they often hold API keys). The full URL is only shown in the edit form.
 
 ## Using the API
 
@@ -123,6 +144,9 @@ All endpoints are under `/api/v1`. Errors use [Problem Details](https://www.rfc-
    - `GET /api/v1/monitors/{id}/incidents` — this monitor's incidents, newest first.
    - `GET /api/v1/incidents?status=open|resolved` — all your incidents.
    - `GET /api/v1/incidents/{id}` — one incident with its notification history.
+   - `GET /api/v1/monitors/{id}/stats` — sampled uptime and p95 latency for 24 h, 7 d and 30 d, with sample counts (`uptimePercent` is `null` when there were no checks).
+   - `GET /api/v1/monitors/{id}/checks/series?window=24h|7d|30d` — chart buckets (5 min / 1 h / 4 h) with check and failure counts and the average and maximum latency of successful checks. Empty buckets are included.
+   - `GET /api/v1/dashboard/summary` — your monitors by state, stale count, open incidents, and when a worker was last seen.
 
    Incident durations run from the **first failed check** to recovery (or to now while open). Detection is delayed by the failure threshold: with a 60 s interval and a threshold of 3, an incident opens about 2–3 minutes after the first failure.
 
@@ -243,7 +267,7 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - **Scalar.AspNetCore 2.18.7** for the Development API reference page.
 - **MailKit 4.18.2** for SMTP.
 - **PostgreSQL 18.6** (Alpine image) and **Mailpit 1.33.1** in Docker Compose.
-- Frontend: **React 19, Vite 8, TypeScript 7, Tailwind CSS 4, React Router 8, Vitest 5**. Linting uses **oxlint**, which the current Vite template ships with, instead of ESLint.
+- Frontend: **React 19, Vite 8, TypeScript 7, Tailwind CSS 4, React Router 8, Vitest 5**, plus **TanStack Query 5.104**, **react-hook-form 7.91** with **zod 4.6**, **Recharts 3.10** (loaded only on monitor pages) and **MSW 3.0** for tests. New libraries were pinned to releases at least two weeks old. `@hookform/resolvers` was left out (its current release has conflicting optional dependencies); a 20-line zod adapter replaces it. Linting uses **oxlint**, which the current Vite template ships with, instead of ESLint.
 
 ## Known limitations
 

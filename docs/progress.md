@@ -181,3 +181,52 @@ One entry per milestone: what was built, how it was verified, and what is left.
   - a monitor with failure threshold 1 on a URL that returns 404 opened an incident, and the email arrived in Mailpit within seconds;
   - the endpoint was shown without its `?token=…`, the name was HTML-escaped, and the API reported `Sent` on attempt 1;
   - the demo monitor was deleted afterwards.
+
+## Milestone 6 — Frontend product (9 Nov 2026)
+
+**Built**
+- **Backend pulled forward from M7** (the M6 exit gate says "no fake data", and the monitor page needs these numbers):
+  - `GET /api/v1/monitors/{id}/stats`: sampled uptime and p95 for 24 h / 7 d / 30 d in one SQL pass (`count(*) FILTER`, `percentile_cont(0.95)` over successful checks). Uptime is `null` without checks, never 100 %.
+  - `GET /api/v1/monitors/{id}/checks/series?window=`: every bucket in the window (5 min / 1 h / 4 h, aligned to the bucket size, built with `generate_series`), with check and failure counts and the average and maximum latency of successful checks only. A timeout never looks like a slow success.
+  - `GET /api/v1/dashboard/summary`: counts by state, stale count (the domain rule), open incidents, worker last seen and online (heartbeat ≤ 60 s).
+  - The stats are a separate endpoint instead of part of `GET /monitors/{id}`, so edits and actions don't pay for three aggregates.
+  - M7 keeps the meter, structured logs, retention, query-plan review, load test and seed command.
+- **Web app** (`web/`):
+  - React Router routes behind `RequireAuth`.
+  - TanStack Query; a 401 anywhere marks the user signed out.
+  - A fetch client that sends the XSRF header on writes, fetches a token when missing, and refreshes and retries once when the server rejects it. Problem Details become a typed `ApiError` with field errors and `Retry-After`.
+  - Pages:
+    - Sign-in and register (zod rules mirror the server; server field errors land on the fields; return path limited to same-site paths).
+    - Dashboard: summary cards linking to filtered lists, open incidents, worker-offline banner.
+    - Monitor list: cards on phones, table on wider screens, state filter and paging in the URL.
+    - Add/edit form: edits send only changed fields with `If-Match`; a `412` offers "Reload the latest version"; a warning appears when the URL changes.
+    - Monitor page: facts, stat tiles with sample counts and a "How are these calculated?" note, a response-time chart with 24h/7d/30d toggle, paged check table, incidents; check now (shows `Retry-After` on 429), pause/resume, delete behind a confirm dialog.
+    - Incident list (All/Open/Resolved) and incident detail with timeline and email delivery status.
+  - Every view has loading, empty, error-with-retry and "couldn't refresh, showing data from …" states.
+- Shared components: Button, ConfirmDialog (focus starts on Cancel, Tab stays inside, Escape closes, focus returns), Toast (polite live region), Field (label, hint and error linked with `aria-describedby`), states, pagination, local time with UTC on hover.
+- The placeholder `ApiStatus` widget and the old dashboard page were removed.
+- Recharts is lazy-loaded with the monitor page, so the main bundle stays under Vite's 500 kB warning.
+
+**Found in the browser check and fixed**
+- A new monitor showed "Not checked yet" for up to 30 s, and its panels mixed older and newer data. Now a monitor without a result polls every 3 s, and a new check result refreshes the stats, chart, checks and incidents together.
+- A single data point in the chart drew nothing (lines need two points); isolated points now get a dot.
+- "1 checks" wording; a redundant second line under HTTP status failures.
+
+**Tests**
+- .NET: 421 in total (300 unit, 121 integration), all passing.
+  - 9 new integration tests on a known data set: exact uptime/p95 per window, an empty window gives `null`, failures only give 0 % and no p95, series bucket counts, alignment and totals, successful-only averages, owner scoping and window validation, and dashboard counts (only my monitors, stale, paused never stale, worker online).
+  - 11 new unit tests (uptime formula, window parsing and bucket limits).
+- Frontend: 40 Vitest + Testing Library + MSW tests (MSW fails any unhandled request).
+  - Plan list: login flow including the return path and the XSRF header; form shows server field errors; list empty state; "No data" uptime instead of 100 %; stale badge; delete confirmation; status badge has text.
+  - Also: wrong-password message, client validation, register field errors, XSRF refresh-and-retry, the 99.999 % → "99.99 %" truncation, check-now `Retry-After` toast, PATCH sends only changed fields with `If-Match`, 412 handling, dashboard banner, empty state and retry, incident timeline and delivery badges, incident filters, incident 404, formatting helpers.
+  - The suite ran 6 times in a row green.
+  - Testing Library's async timeout was raised to 5 s: the first render that loads the lazy chart module occasionally took longer than 1 s under load.
+- Manual check in the browser against the real API, worker and Postgres:
+  - registered through the UI; an SSRF rejection appeared on the URL field;
+  - created a public monitor (the query string was hidden), with the first result within seconds;
+  - check now, then the 429 message with seconds remaining;
+  - a 404 monitor with threshold 1 went Down, its incident opened and the "Down" email showed Sent;
+  - editing the URL resolved it, and the "Recovered" email showed Sent;
+  - pause; delete with confirm (Escape cancels);
+  - phone width (375 px) with no sideways scrolling; sign-out, after which protected pages redirect to sign-in.
+  - The only console error was the intentional 429.
