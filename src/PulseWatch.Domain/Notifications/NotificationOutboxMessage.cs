@@ -28,7 +28,11 @@ public enum NotificationStatus : short
 /// <summary>
 /// A notification waiting to be delivered. It is written in the same transaction as the incident
 /// change that caused it, so a committed incident event cannot be silently lost.
-/// Delivery and retry behaviour is added in Milestone 5.
+/// <para>Delivery lifecycle: the dispatcher claims due rows with one SQL statement that sets
+/// <see cref="NotificationStatus.Sending"/>, counts the attempt and takes a lease. Counting at claim
+/// time means a message that crashes the worker mid-send still runs out of attempts. After the send,
+/// <see cref="MarkSent"/> or <see cref="MarkFailed"/> records the result. A row whose lease expires
+/// while Sending is claimed again (at-least-once delivery).</para>
 /// </summary>
 public sealed class NotificationOutboxMessage
 {
@@ -89,4 +93,81 @@ public sealed class NotificationOutboxMessage
     public static string BuildIdempotencyKey(
         Guid incidentId, NotificationEventType eventType, NotificationChannel channel, string recipient) =>
         $"{incidentId:N}:{eventType}:{channel}:{recipient.Trim().ToUpperInvariant()}";
+
+    /// <summary>Whether the dispatcher may claim this message at <paramref name="nowUtc"/>.</summary>
+    public bool IsDue(DateTimeOffset nowUtc) => Status switch
+    {
+        NotificationStatus.Pending or NotificationStatus.Failed => NextAttemptAtUtc <= nowUtc,
+        NotificationStatus.Sending => LeaseUntilUtc < nowUtc, // the previous sender died mid-send
+        _ => false,
+    };
+
+    /// <summary>
+    /// Starts a delivery attempt. The dispatcher's claim SQL applies exactly this change to many rows at
+    /// once (see OutboxStore in Infrastructure); keep the two in sync.
+    /// </summary>
+    public void BeginAttempt(DateTimeOffset nowUtc, DateTimeOffset leaseUntilUtc)
+    {
+        Guard.Utc(nowUtc);
+        Guard.Utc(leaseUntilUtc);
+        if (!IsDue(nowUtc))
+        {
+            throw new DomainException("The message is not due for delivery.");
+        }
+
+        if (leaseUntilUtc <= nowUtc)
+        {
+            throw new DomainException("The lease must end in the future.");
+        }
+
+        Status = NotificationStatus.Sending;
+        AttemptCount++;
+        LastAttemptAtUtc = nowUtc;
+        LeaseUntilUtc = leaseUntilUtc;
+    }
+
+    /// <summary>The send succeeded.</summary>
+    public void MarkSent(DateTimeOffset nowUtc)
+    {
+        Guard.Utc(nowUtc);
+        EnsureSending();
+        Status = NotificationStatus.Sent;
+        SentAtUtc = nowUtc;
+        LastAttemptAtUtc = nowUtc;
+        LeaseUntilUtc = null;
+        LastErrorCategory = null;
+    }
+
+    /// <summary>
+    /// The send failed. A permanent error, or running out of attempts, ends in
+    /// <see cref="NotificationStatus.Exhausted"/>; otherwise the message is retried after <paramref name="retryDelay"/>.
+    /// </summary>
+    /// <param name="errorCategory">A short fixed label such as "ConnectionFailed". Never an exception message.</param>
+    public void MarkFailed(DateTimeOffset nowUtc, string errorCategory, bool permanent, int maxAttempts, TimeSpan retryDelay)
+    {
+        Guard.Utc(nowUtc);
+        EnsureSending();
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(retryDelay, TimeSpan.Zero);
+
+        LastAttemptAtUtc = nowUtc;
+        LeaseUntilUtc = null;
+        LastErrorCategory = Guard.Text(errorCategory, ErrorCategoryMaxLength);
+        if (permanent || AttemptCount >= maxAttempts)
+        {
+            Status = NotificationStatus.Exhausted;
+            return;
+        }
+
+        Status = NotificationStatus.Failed;
+        NextAttemptAtUtc = nowUtc + retryDelay;
+    }
+
+    private void EnsureSending()
+    {
+        if (Status != NotificationStatus.Sending)
+        {
+            throw new DomainException("Only a message that is being sent can record a delivery result.");
+        }
+    }
 }

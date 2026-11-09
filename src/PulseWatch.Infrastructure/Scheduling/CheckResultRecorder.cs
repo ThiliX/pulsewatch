@@ -3,13 +3,17 @@ using PulseWatch.Application.Probing;
 using PulseWatch.Application.Scheduling;
 using PulseWatch.Domain.Incidents;
 using PulseWatch.Domain.Monitoring;
+using PulseWatch.Domain.Notifications;
+using PulseWatch.Infrastructure.Notifications;
 using PulseWatch.Infrastructure.Persistence;
 
 namespace PulseWatch.Infrastructure.Scheduling;
 
 /// <summary>
 /// Applies one probe result in a single transaction: insert the check, update the monitor's state and
-/// counters, open or resolve its incident, schedule the next check and release the lease.
+/// counters, open or resolve its incident, queue the alert email (outbox), schedule the next check and
+/// release the lease. Because the outbox row commits together with the incident change, an incident
+/// event can't be committed without its notification, or the other way round.
 /// The monitor row is locked first, so an API edit or another worker can't interleave.
 /// </summary>
 internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider time) : ICheckResultRecorder
@@ -58,11 +62,41 @@ internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider t
             db.Incidents.Add(evaluation.Incident!);
         }
 
-        monitor.CompleteCheck(check.StartedAtUtc, time.GetUtcNow());
+        var now = time.GetUtcNow();
+        monitor.CompleteCheck(check.StartedAtUtc, now);
         db.MonitorChecks.Add(check);
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        // After SaveChanges, so the incident row exists for the outbox foreign key.
+        if (evaluation.Transition is IncidentTransition.Opened or IncidentTransition.Resolved)
+        {
+            await EnqueueNotificationAsync(monitor, evaluation, now, cancellationToken).ConfigureAwait(false);
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return RecordOutcome.Recorded;
+    }
+
+    /// <summary>MVP: one email to the monitor's owner per incident event.</summary>
+    private async Task EnqueueNotificationAsync(
+        EndpointMonitor monitor, CheckEvaluation evaluation, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var ownerEmail = await db.Users
+            .Where(u => u.Id == monitor.OwnerUserId)
+            .Select(u => u.Email)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(ownerEmail))
+        {
+            return; // every registered user has an email; nothing to send to otherwise
+        }
+
+        var eventType = evaluation.Transition == IncidentTransition.Opened
+            ? NotificationEventType.IncidentOpened
+            : NotificationEventType.IncidentResolved;
+        var message = NotificationOutboxMessage.Create(
+            evaluation.Incident!.Id, eventType, NotificationChannel.Email, ownerEmail, now);
+        await OutboxWriter.EnqueueAsync(db, message, cancellationToken).ConfigureAwait(false);
     }
 }

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using PulseWatch.Application.Security;
 using PulseWatch.Domain.Incidents;
 using PulseWatch.Domain.Monitoring;
+using PulseWatch.Domain.Notifications;
 using PulseWatch.IntegrationTests.Infrastructure;
 using PulseWatch.Worker;
 
@@ -32,6 +33,7 @@ public class IncidentLifecycleTests(PostgresFixture postgres)
         {
             ["ConnectionStrings:PulseWatch"] = connectionString,
             ["Monitoring:PollIntervalSeconds"] = "1",
+            ["Notifications:PollIntervalSeconds"] = "1",
             ["Monitoring:AllowedPorts:0"] = port.ToString(CultureInfo.InvariantCulture),
             ["Worker:WorkerId"] = "lifecycle-worker",
         });
@@ -163,6 +165,23 @@ public class IncidentLifecycleTests(PostgresFixture postgres)
             Assert.Equal(IncidentStatus.Resolved, incident.Status);
             Assert.Equal(check8.CompletedAtUtc, incident.ResolvedAtUtc);
             Assert.Equal(MonitorState.Healthy, monitor.State);
+
+            // 8. Exactly two emails (opened + resolved), both delivered by the dispatcher (Logging provider).
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (true)
+            {
+                await using var db = PostgresFixture.CreateContext(connectionString);
+                var statuses = await db.NotificationOutbox.AsNoTracking()
+                    .Where(n => n.IncidentId == incident.Id).Select(n => n.Status).ToListAsync(Ct);
+                Assert.True(statuses.Count <= 2, $"Expected at most 2 notifications but found {statuses.Count}.");
+                if (statuses.Count == 2 && statuses.All(s => s == NotificationStatus.Sent))
+                {
+                    break;
+                }
+
+                Assert.True(DateTime.UtcNow < deadline, "Timed out waiting for both notifications to be sent.");
+                await Task.Delay(150, Ct);
+            }
         }
         finally
         {
@@ -170,7 +189,7 @@ public class IncidentLifecycleTests(PostgresFixture postgres)
             worker.Dispose();
         }
 
-        // 8. The API shows the same story.
+        // 9. The API shows the same story.
         var apiIncidents = await owner.Http.GetFromJsonAsync<JsonElement>($"/api/v1/monitors/{monitorId}/incidents", Ct);
         var apiIncident = Assert.Single(apiIncidents.GetProperty("items").EnumerateArray());
         Assert.Equal("Resolved", apiIncident.GetProperty("status").GetString());
@@ -183,5 +202,15 @@ public class IncidentLifecycleTests(PostgresFixture postgres)
 
         var openNow = await owner.Http.GetFromJsonAsync<JsonElement>("/api/v1/incidents?status=open", Ct);
         Assert.Equal(0, openNow.GetProperty("totalCount").GetInt32());
+
+        var detail = await owner.Http.GetFromJsonAsync<JsonElement>(
+            $"/api/v1/incidents/{apiIncident.GetProperty("id").GetGuid()}", Ct);
+        var notifications = detail.GetProperty("notifications").EnumerateArray().ToList();
+        Assert.Equal(["IncidentOpened", "IncidentResolved"], notifications.Select(n => n.GetProperty("eventType").GetString()));
+        Assert.All(notifications, n =>
+        {
+            Assert.Equal("Sent", n.GetProperty("status").GetString());
+            Assert.Equal(1, n.GetProperty("attemptCount").GetInt32());
+        });
     }
 }

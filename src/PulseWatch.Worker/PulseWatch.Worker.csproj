@@ -14,4 +14,8 @@
     <ProjectReference Include="..\PulseWatch.Infrastructure\PulseWatch.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PulseWatch.IntegrationTests" />
+  </ItemGroup>
+
 </Project>

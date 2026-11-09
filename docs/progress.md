@@ -131,3 +131,53 @@ One entry per milestone: what was built, how it was verified, and what is left.
   - Ownership: the 2 new per-monitor routes return the same 404 for another user's monitor; another user's incident id looks missing and never appears in lists; anonymous callers get 401 on the incident routes.
 - Test infrastructure: the test PostgreSQL allows 500 connections and each test database uses a small pool (the growing suite hit the default limit of 100).
 - Manual check against Docker Compose: signed in, read the GitHub status monitor's stored check (200, 596 ms) and the (empty) incident list; OpenAPI lists 14 routes.
+
+## Milestone 5 — Notifications (9 Nov 2026)
+
+**Built**
+- **Outbox rows written in the incident transaction**: when `CheckResultRecorder` opens or resolves an incident, it queues one email to the monitor's owner in the same transaction (`INSERT … ON CONFLICT (idempotency_key) DO NOTHING`, so a duplicate can never roll back the check).
+- **`OutboxDispatcherService`** in the worker: every 10 s it leases up to 20 due rows with `FOR UPDATE SKIP LOCKED`, counts the attempt at claim time (a message that crashes the worker still runs out of attempts) and sends up to 5 at once.
+  - Success → `Sent`.
+  - Transient failure → `Failed`, retried after 30 s × 2^(attempts − 1), ±20 % jitter, at most 1 hour.
+  - Permanent failure (rejected address) or 6 attempts → `Exhausted`.
+  - A row left `Sending` by a dead worker is claimed again after its lease (at-least-once delivery), or marked `Exhausted` (`Interrupted`) if that was its last attempt.
+  - A late result from an expired lease can't overwrite a newer attempt: completion checks the attempt number.
+- Domain: `NotificationOutboxMessage.IsDue`, `BeginAttempt`, `MarkSent`, `MarkFailed`. The claim SQL applies the same change as `BeginAttempt`.
+- **`IEmailSender`**:
+  - `LoggingEmailSender` is the default.
+  - `SmtpEmailSender` uses MailKit 4.18.2: one connection per email, STARTTLS required unless turned off for Mailpit, implicit TLS on port 465, hard send timeout.
+  - Errors map to fixed categories (`ConnectionFailed`, `Timeout`, `AuthenticationFailed`, `RecipientRejected`, …). Server replies are never stored.
+- **Email templates** (text + HTML):
+  - Content: monitor name, endpoint without query string, evidence, UTC times, outage length on recovery, link to `App:PublicBaseUrl/incidents/{id}`.
+  - Safety: HTML-encoded, control characters stripped from the subject (no header injection).
+- **Options**: `Notifications` (Provider, MaxAttempts, PollIntervalSeconds, BatchSize, MaxConcurrentSends, SendTimeoutSeconds), `Email`, and `App:PublicBaseUrl`. All are validated at worker start; with `Provider = Smtp`, Host and FromAddress are required.
+- `GET /api/v1/incidents/{id}` already returned delivery history (M4); it now shows real statuses.
+- Worker: explicit `WorkerProgram.Main` and a separate `WorkerSetup.cs`. With internals visible to the integration tests, the generated top-level `Program` clashed with the API's.
+
+**Tests (401 .NET tests in total: 289 unit, 112 integration; all passing)**
+- 60 new unit tests:
+  - outbox lifecycle and due rules;
+  - backoff values, cap and jitter bounds;
+  - templates: query string never shown, HTML encoding, CR/LF in names, long names, base URL with a path;
+  - SMTP error classification, TLS mode, MIME headers, unparseable recipient;
+  - notification option validation.
+- 15 new integration tests:
+  - Recorder: opening and resolving each queue exactly one email to the owner; nothing between. A duplicate key is ignored inside the transaction. Deleting a monitor removes its queued emails.
+  - Dispatcher (real store and Postgres, scripted sender, manual clock):
+    - sends once with safe content;
+    - **fails twice then works → Sent on attempt 3**, not retried before the backoff;
+    - **always failing → Exhausted after 6 attempts**, never sent again;
+    - permanent failure → Exhausted at once;
+    - **restarted dispatcher doesn't resend a Sent row**;
+    - a crashed worker's row is sent after its lease;
+    - interrupted on the last attempt → Exhausted;
+    - a late result from an expired lease is ignored;
+    - two dispatchers send 30 messages exactly once each.
+  - **SMTP outage**: full worker host with the real SMTP sender pointed at a closed port. The incident opens, checks keep being recorded, the email is `Failed`/`ConnectionFailed` awaiting retry, and **captured logs never contain the SMTP password**.
+  - **Mailpit** (Testcontainers, SMTP auth required): the real sender delivers both bodies with the escaped name and no query string. A wrong password is `AuthenticationFailed`, retried later, and neither password appears in the logs.
+  - The M4 lifecycle test now also waits for both emails to be `Sent` and checks them through `GET /api/v1/incidents/{id}`.
+- Integration suite run 3 times in a row: stable. Release build passes; `dotnet format` is clean; no model changes since the last migration.
+- Manual check against Docker Compose (worker with `Provider = Smtp` → Mailpit):
+  - a monitor with failure threshold 1 on a URL that returns 404 opened an incident, and the email arrived in Mailpit within seconds;
+  - the endpoint was shown without its `?token=…`, the name was HTML-escaped, and the API reported `Sent` on attempt 1;
+  - the demo monitor was deleted afterwards.
