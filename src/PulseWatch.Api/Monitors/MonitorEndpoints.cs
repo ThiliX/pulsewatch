@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PulseWatch.Api.Auth;
+using PulseWatch.Api.Common;
 using PulseWatch.Api.RateLimiting;
 using PulseWatch.Application.Monitors;
 using PulseWatch.Application.Options;
@@ -13,13 +14,11 @@ using PulseWatch.Infrastructure.Persistence;
 namespace PulseWatch.Api.Monitors;
 
 /// <summary>
-/// Monitor endpoints. Every query goes through <see cref="Owned"/>, so a user can only ever see or
+/// Monitor endpoints. Every query goes through <see cref="Ownership.OwnedMonitors"/>, so a user can only ever see or
 /// change their own monitors. Missing and not-owned ids both return the same 404.
 /// </summary>
 internal static class MonitorEndpoints
 {
-    private const int DefaultPageSize = 25;
-    private const int MaxPageSize = 100;
     private static readonly TimeSpan ManualCheckCooldown = TimeSpan.FromSeconds(60);
 
     public static void MapMonitorEndpoints(this IEndpointRouteBuilder app)
@@ -82,31 +81,17 @@ internal static class MonitorEndpoints
             .ProducesProblem(StatusCodes.Status429TooManyRequests);
     }
 
-    private static IQueryable<EndpointMonitor> Owned(this PulseWatchDbContext db, ClaimsPrincipal user)
-    {
-        var userId = user.GetUserId();
-        return db.Monitors.Where(m => m.OwnerUserId == userId);
-    }
-
     private static async Task<IResult> ListAsync(
         ClaimsPrincipal user,
         PulseWatchDbContext db,
         TimeProvider time,
         CancellationToken cancellationToken,
         int page = 1,
-        int pageSize = DefaultPageSize,
+        int pageSize = Paging.DefaultPageSize,
         string? state = null)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        if (page < 1)
-        {
-            errors["page"] = ["Page must be 1 or more."];
-        }
-
-        if (pageSize is < 1 or > MaxPageSize)
-        {
-            errors["pageSize"] = [$"Page size must be between 1 and {MaxPageSize}."];
-        }
+        Paging.Validate(page, pageSize, errors);
 
         MonitorState? stateFilter = null;
         if (state is not null)
@@ -127,7 +112,7 @@ internal static class MonitorEndpoints
             return Results.ValidationProblem(errors);
         }
 
-        var query = db.Owned(user);
+        var query = db.OwnedMonitors(user);
         if (stateFilter is { } filter)
         {
             query = query.Where(m => m.State == filter);
@@ -137,8 +122,7 @@ internal static class MonitorEndpoints
         var monitors = await query
             .OrderByDescending(m => m.CreatedAtUtc)
             .ThenByDescending(m => m.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
+            .Page(page, pageSize)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -195,10 +179,10 @@ internal static class MonitorEndpoints
     private static async Task<IResult> GetAsync(
         Guid id, ClaimsPrincipal user, HttpContext context, PulseWatchDbContext db, TimeProvider time, CancellationToken cancellationToken)
     {
-        var monitor = await db.Owned(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
+        var monitor = await db.OwnedMonitors(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
         if (monitor is null)
         {
-            return MonitorNotFound();
+            return Ownership.MonitorNotFound();
         }
 
         SetETag(context, monitor);
@@ -215,10 +199,10 @@ internal static class MonitorEndpoints
         TimeProvider time,
         CancellationToken cancellationToken)
     {
-        var monitor = await db.Owned(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
+        var monitor = await db.OwnedMonitors(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
         if (monitor is null)
         {
-            return MonitorNotFound();
+            return Ownership.MonitorNotFound();
         }
 
         if (ReadIfMatch(context) is { } ifMatch)
@@ -251,17 +235,17 @@ internal static class MonitorEndpoints
         Guid id, ClaimsPrincipal user, PulseWatchDbContext db, CancellationToken cancellationToken)
     {
         // Checks, incidents and outbox rows are removed by ON DELETE CASCADE.
-        var deleted = await db.Owned(user).Where(m => m.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        return deleted == 0 ? MonitorNotFound() : Results.NoContent();
+        var deleted = await db.OwnedMonitors(user).Where(m => m.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        return deleted == 0 ? Ownership.MonitorNotFound() : Results.NoContent();
     }
 
     private static async Task<IResult> PauseAsync(
         Guid id, ClaimsPrincipal user, HttpContext context, PulseWatchDbContext db, TimeProvider time, CancellationToken cancellationToken)
     {
-        var monitor = await db.Owned(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
+        var monitor = await db.OwnedMonitors(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
         if (monitor is null)
         {
-            return MonitorNotFound();
+            return Ownership.MonitorNotFound();
         }
 
         var now = time.GetUtcNow();
@@ -275,10 +259,10 @@ internal static class MonitorEndpoints
     private static async Task<IResult> ResumeAsync(
         Guid id, ClaimsPrincipal user, HttpContext context, PulseWatchDbContext db, TimeProvider time, CancellationToken cancellationToken)
     {
-        var monitor = await db.Owned(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
+        var monitor = await db.OwnedMonitors(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
         if (monitor is null)
         {
-            return MonitorNotFound();
+            return Ownership.MonitorNotFound();
         }
 
         var hasOpenIncident = await HasOpenIncidentAsync(db, monitor.Id, cancellationToken).ConfigureAwait(false);
@@ -293,10 +277,10 @@ internal static class MonitorEndpoints
     private static async Task<IResult> CheckNowAsync(
         Guid id, ClaimsPrincipal user, HttpContext context, PulseWatchDbContext db, TimeProvider time, CancellationToken cancellationToken)
     {
-        var monitor = await db.Owned(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
+        var monitor = await db.OwnedMonitors(user).SingleOrDefaultAsync(m => m.Id == id, cancellationToken).ConfigureAwait(false);
         if (monitor is null)
         {
-            return MonitorNotFound();
+            return Ownership.MonitorNotFound();
         }
 
         if (!monitor.IsEnabled)
@@ -326,9 +310,6 @@ internal static class MonitorEndpoints
 
     private static Task<bool> HasOpenIncidentAsync(PulseWatchDbContext db, Guid monitorId, CancellationToken cancellationToken) =>
         db.Incidents.AnyAsync(i => i.MonitorId == monitorId && i.Status == IncidentStatus.Open, cancellationToken);
-
-    private static IResult MonitorNotFound() =>
-        Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Monitor not found.");
 
     internal static IResult VersionConflict() =>
         Results.Problem(

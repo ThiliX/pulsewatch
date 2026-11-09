@@ -22,7 +22,43 @@ public class OwnershipTests(PostgresFixture postgres)
         { "POST", "/api/v1/monitors/{id}/pause" },
         { "POST", "/api/v1/monitors/{id}/resume" },
         { "POST", "/api/v1/monitors/{id}/check-now" },
+        { "GET", "/api/v1/monitors/{id}/checks" },
+        { "GET", "/api/v1/monitors/{id}/incidents" },
     };
+
+    [Fact]
+    public async Task Another_users_incident_looks_exactly_like_a_missing_one_and_never_appears_in_lists()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var factory = new ApiFactory(connectionString);
+        using var alice = await factory.CreateSignedInClientAsync();
+        using var bob = await factory.CreateSignedInClientAsync();
+        using var created = await alice.Http.PostAsJsonAsync(
+            "/api/v1/monitors", new { name = "Alice's API", url = "https://alice.example.com/", failureThreshold = 1 }, Ct);
+        var monitorId = (await created.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("id").GetGuid();
+        Guid incidentId;
+        await using (var db = PostgresFixture.CreateContext(connectionString))
+        {
+            var monitor = await db.Monitors.SingleAsync(m => m.Id == monitorId, Ct);
+            var incident = monitor.ApplyCheckResult(TestData.Failure(monitor, DateTimeOffset.UtcNow), null).Incident!;
+            db.Incidents.Add(incident);
+            await db.SaveChangesAsync(Ct);
+            incidentId = incident.Id;
+        }
+
+        using var foreign = await bob.Http.GetAsync($"/api/v1/incidents/{incidentId}", Ct);
+        using var missing = await bob.Http.GetAsync($"/api/v1/incidents/{Guid.NewGuid()}", Ct);
+        var bobsList = await bob.Http.GetFromJsonAsync<JsonElement>("/api/v1/incidents", Ct);
+        using var alicesView = await alice.Http.GetAsync($"/api/v1/incidents/{incidentId}", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal(
+            (await missing.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString(),
+            (await foreign.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
+        Assert.Equal(0, bobsList.GetProperty("totalCount").GetInt32());
+        Assert.Equal(HttpStatusCode.OK, alicesView.StatusCode);
+    }
 
     private static HttpRequestMessage Request(string method, string route, Guid id)
     {
@@ -82,6 +118,8 @@ public class OwnershipTests(PostgresFixture postgres)
     [MemberData(nameof(MonitorRoutes))]
     [InlineData("GET", "/api/v1/monitors")]
     [InlineData("POST", "/api/v1/monitors")]
+    [InlineData("GET", "/api/v1/incidents")]
+    [InlineData("GET", "/api/v1/incidents/{id}")]
     public async Task Anonymous_callers_get_401_on_every_monitor_route(string method, string route)
     {
         await using var factory = new ApiFactory(await postgres.CreateDatabaseAsync());

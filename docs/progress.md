@@ -114,3 +114,20 @@ One entry per milestone: what was built, how it was verified, and what is left.
 - An edit that lands at the exact moment the worker claims or records the same monitor gets 412 and must be retried (both touch the row's version).
 - Scheduling tolerance is about one poll interval plus queueing; worker lag metrics come in M7.
 - SSRF layer 4 (egress firewall) is a deployment task (M8).
+
+## Milestone 4 — Incidents end to end (9 Nov 2026)
+
+**Built**
+- **Check history**: `GET /api/v1/monitors/{id}/checks?fromUtc=&toUtc=&page=&pageSize=`, newest first, default window the last 24 hours, window limited to the retention period (30 days), bounded pages.
+- **Incidents**: `GET /api/v1/monitors/{id}/incidents`, `GET /api/v1/incidents?status=open|resolved`, `GET /api/v1/incidents/{id}` (with notification history from the outbox, ready for M5). Responses include the monitor name, duration from the first failure (to now while open), failure count and the opening evidence (outcome and status code).
+- Shared `Ownership` helpers (`OwnedMonitors`, `OwnedIncidents`) so every list and detail query starts from the signed-in user's monitors; shared `Paging` limits.
+- **Duplicate-incident safety, by design**: the recorder locks the monitor row (`FOR UPDATE`) before reading the open incident, and inserting an incident needs a key-share lock on that same row (foreign key), so two writers are serialised by PostgreSQL itself. The partial unique index stays as the last line of defence. A separate unique-violation retry was therefore not added: it would be unreachable code.
+
+**Tests (326 .NET tests in total: 229 unit, 97 integration; all passing)**
+- 97 integration tests, new:
+  - **Lifecycle (exit gate)**: monitor created through the real API; a real worker with the real probe engine checks a local HTTP server switched 200 → 500 → 200. Verified step by step: healthy; two failures = Degraded, no incident; third failure opens exactly one incident dated from the first failure; more failures add to it; **worker restarted mid-incident** with no duplicate; first success (recovery threshold 2) keeps it open; second success resolves it exactly once; later successes change nothing; the API shows 9 checks and 1 resolved incident with 5 failures. Repeated 3 extra times: stable.
+  - Two recorders writing failures for the same monitor at the same moment → one incident with 2 failures.
+  - History endpoints: default 24 h window, explicit window, newest-first paging, invalid windows/paging rejected, per-monitor and global incident lists, status filter, details with notifications, durations.
+  - Ownership: the 2 new per-monitor routes return the same 404 for another user's monitor; another user's incident id looks missing and never appears in lists; anonymous callers get 401 on the incident routes.
+- Test infrastructure: the test PostgreSQL allows 500 connections and each test database uses a small pool (the growing suite hit the default limit of 100).
+- Manual check against Docker Compose: signed in, read the GitHub status monitor's stored check (200, 596 ms) and the (empty) incident list; OpenAPI lists 14 routes.
