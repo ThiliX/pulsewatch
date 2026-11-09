@@ -4,7 +4,7 @@
 
 PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a schedule, records status and response time, opens an incident when failures persist, emails you when it starts and when it recovers, and shows the history in a dashboard.
 
-> **Status: Milestone 3 (probe engine and scheduler).** The worker now checks your monitors on schedule, records every result and opens incidents after repeated failures. Incident endpoints, email alerts and the real dashboard come in Milestones 4–6. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
+> **Status: Milestone 4 (incidents end to end).** The worker checks your monitors on schedule, opens an incident after repeated failures and resolves it on recovery; check history and incidents are available through the API. Email alerts and the real dashboard come in Milestones 5–6. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
 
 ## What works today
 
@@ -23,7 +23,8 @@ PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a
 | PostgreSQL + Mailpit via Docker Compose | ✅ |
 | React frontend shell | ✅ shows whether the API is reachable |
 | CI (format, build, test for .NET and React) | ✅ workflow defined |
-| Incident endpoints, email alerts, dashboard | ⏳ Milestones 4–6 |
+| Check history and incidents API | ✅ per-monitor check history (time window, paged), per-monitor and global incident lists, incident details with notification history |
+| Email alerts, dashboard | ⏳ Milestones 5–6 |
 
 ## Architecture
 
@@ -116,9 +117,16 @@ All endpoints are under `/api/v1`. Errors use [Problem Details](https://www.rfc-
 2. Send that cookie's value in the `X-XSRF-TOKEN` header on **every** POST, PATCH and DELETE. A fresh token is issued after sign-in and sign-out.
 3. `POST /api/v1/auth/register` or `/login` with `{ "email": "...", "password": "..." }` sets the HttpOnly `pw.auth` cookie. Passwords need at least 12 characters.
 4. Manage monitors: `GET/POST /api/v1/monitors`, `GET/PATCH/DELETE /api/v1/monitors/{id}`, `POST .../pause`, `.../resume`, `.../check-now`.
+5. Read results:
+   - `GET /api/v1/monitors/{id}/checks?fromUtc=&toUtc=&page=&pageSize=` — newest first; defaults to the last 24 hours; a window can span at most the retention period (30 days).
+   - `GET /api/v1/monitors/{id}/incidents` — this monitor's incidents, newest first.
+   - `GET /api/v1/incidents?status=open|resolved` — all your incidents.
+   - `GET /api/v1/incidents/{id}` — one incident with its notification history.
+
+   Incident durations run from the **first failed check** to recovery (or to now while open). Detection is delayed by the failure threshold: with a 60 s interval and a threshold of 3, an incident opens about 2–3 minutes after the first failure.
 
 Rules worth knowing:
-- Another user's monitor id returns the same `404` as an id that doesn't exist.
+- Another user's monitor or incident id returns the same `404` as an id that doesn't exist.
 - Monitor URLs must point to a public destination. Local names (`localhost`, `*.local`, `*.internal`, …), private/reserved IPs and host names whose DNS answers include any non-public address are rejected.
 - `PATCH` changes only the fields you send. Send `If-Match: <ETag>` to get `412` instead of overwriting a newer change.
 - `check-now` returns `202` and is limited to once per minute per monitor (`429` with `Retry-After`). The worker runs the check on its next poll (within about 5 seconds).

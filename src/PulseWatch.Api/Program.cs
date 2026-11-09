@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using PulseWatch.Api.Auth;
 using PulseWatch.Api.Errors;
 using PulseWatch.Api.Health;
+using PulseWatch.Api.Incidents;
 using PulseWatch.Api.Monitors;
 using PulseWatch.Api.OpenApi;
 using PulseWatch.Api.RateLimiting;
@@ -81,6 +82,8 @@ app.MapHealthChecks(HealthRoutes.Ready, new HealthCheckOptions
 
 app.MapAuthEndpoints();
 app.MapMonitorEndpoints();
+app.MapMonitorHistoryEndpoints();
+app.MapIncidentEndpoints();
 
 await app.RunAsync();
 return 0;

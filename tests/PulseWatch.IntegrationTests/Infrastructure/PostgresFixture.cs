@@ -13,8 +13,11 @@ namespace PulseWatch.IntegrationTests.Infrastructure;
 /// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
-    // Same image as docker-compose.yml.
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:18.6-alpine").Build();
+    // Same image as docker-compose.yml. Many test databases are open at once, so allow more connections
+    // than the default 100 (each test database also gets a small pool, below).
+    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:18.6-alpine")
+        .WithCommand("-c", "max_connections=500")
+        .Build();
 
     public async ValueTask InitializeAsync() => await _container.StartAsync();
 
@@ -36,6 +39,8 @@ public sealed class PostgresFixture : IAsyncLifetime
         var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString())
         {
             Database = name,
+            MaxPoolSize = 10,
+            ConnectionIdleLifetime = 15,
         }.ConnectionString;
 
         if (migrate)

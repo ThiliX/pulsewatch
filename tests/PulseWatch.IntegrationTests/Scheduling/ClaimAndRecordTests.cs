@@ -176,6 +176,34 @@ public class ClaimAndRecordTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Two_workers_recording_failures_for_the_same_monitor_at_once_open_only_one_incident()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        EndpointMonitor monitor;
+        await using (var setup = PostgresFixture.CreateContext(connectionString))
+        {
+            var user = await TestData.AddUserAsync(setup);
+            monitor = await AddMonitorAsync(setup, user.Id, Now().AddMinutes(-1), MonitorSettings.Default with { FailureThreshold = 1 });
+        }
+
+        // Simulates two workers that both hold a result for the same monitor (e.g. after a lease expired).
+        // The row lock serialises them: the second sees the first one's incident and adds to it.
+        var recorders = Enumerable.Range(0, 2).Select(async i =>
+        {
+            await using var db = PostgresFixture.CreateContext(connectionString);
+            return await new CheckResultRecorder(db, TimeProvider.System)
+                .RecordAsync(Claimed(monitor), Result(CheckOutcome.ConnectionFailure, Now().AddMilliseconds(i)), Ct);
+        });
+        var outcomes = await Task.WhenAll(recorders);
+
+        Assert.All(outcomes, o => Assert.Equal(RecordOutcome.Recorded, o));
+        await using var read = PostgresFixture.CreateContext(connectionString);
+        var incident = await read.Incidents.SingleAsync(i => i.MonitorId == monitor.Id, Ct);
+        Assert.Equal(2, incident.FailureCount);
+        Assert.Equal(2, await read.MonitorChecks.CountAsync(c => c.MonitorId == monitor.Id, Ct));
+    }
+
+    [Fact]
     public async Task A_result_for_a_monitor_deleted_during_the_check_is_dropped()
     {
         var connectionString = await postgres.CreateDatabaseAsync();
