@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <UserSecretsId>pulsewatch-api-3f0b6a52-6d0e-4c1e-9b7a-1f2c8d4e5a61</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PulseWatch.Application\PulseWatch.Application.csproj" />
+    <ProjectReference Include="..\PulseWatch.Infrastructure\PulseWatch.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

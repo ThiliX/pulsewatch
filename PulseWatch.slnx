@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PulseWatch.Api/PulseWatch.Api.csproj" />
+    <Project Path="src/PulseWatch.Application/PulseWatch.Application.csproj" />
+    <Project Path="src/PulseWatch.Domain/PulseWatch.Domain.csproj" />
+    <Project Path="src/PulseWatch.Infrastructure/PulseWatch.Infrastructure.csproj" />
+    <Project Path="src/PulseWatch.Worker/PulseWatch.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PulseWatch.IntegrationTests/PulseWatch.IntegrationTests.csproj" />
+    <Project Path="tests/PulseWatch.UnitTests/PulseWatch.UnitTests.csproj" />
+  </Folder>
+</Solution>
