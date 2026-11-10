@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.RegularExpressions;
+using PulseWatch.Domain.Common;
 using PulseWatch.Domain.Monitoring;
 
 namespace PulseWatch.Application.Security;
@@ -52,7 +53,7 @@ public sealed partial class DestinationValidator(
     public async Task<DestinationCheck> ValidateAsync(string url, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(url) || url.Length > MonitorLimits.UrlMaxLength
-            || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            || !AbsoluteUrl.TryParse(url, out var uri))
         {
             return DestinationCheck.Reject(DestinationErrorCodes.InvalidUrl, "Enter a valid absolute URL.");
         }
