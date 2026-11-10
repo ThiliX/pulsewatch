@@ -423,6 +423,9 @@ namespace PulseWatch.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_monitor_checks");
 
+                    b.HasIndex("StartedAtUtc")
+                        .HasDatabaseName("ix_monitor_checks_started_at");
+
                     b.HasIndex("MonitorId", "StartedAtUtc")
                         .IsDescending(false, true)
                         .HasDatabaseName("ix_monitor_checks_monitor_started");
@@ -512,7 +515,7 @@ namespace PulseWatch.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("NextAttemptAtUtc")
                         .HasDatabaseName("ix_notification_outbox_due")
-                        .HasFilter("status IN (0, 3)");
+                        .HasFilter("status IN (0, 1, 3)");
 
                     b.ToTable("notification_outbox", null, t =>
                         {

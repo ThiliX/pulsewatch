@@ -29,5 +29,10 @@ internal sealed class MonitorCheckConfiguration : IEntityTypeConfiguration<Monit
         builder.HasIndex(c => new { c.MonitorId, c.StartedAtUtc })
             .IsDescending(false, true)
             .HasDatabaseName("ix_monitor_checks_monitor_started");
+
+        // Retention deletes the oldest checks across all monitors in batches; without this index each
+        // batch would scan the whole table.
+        builder.HasIndex(c => c.StartedAtUtc)
+            .HasDatabaseName("ix_monitor_checks_started_at");
     }
 }

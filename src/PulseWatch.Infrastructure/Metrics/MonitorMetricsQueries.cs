@@ -79,18 +79,22 @@ public sealed class MonitorMetricsQueries(PulseWatchDbContext db)
         var bucketCount = (int)(window.Length.Ticks / bucketTicks);
         var firstBucket = lastBucket - (window.BucketSize * (bucketCount - 1));
 
+        // One pass over the window's checks: date_bin assigns each check to its bucket, then the full list
+        // of buckets is joined on, so empty buckets appear too. (Joining buckets to checks by range instead
+        // compares every bucket with every check, which grows to millions of comparisons on a 30-day window.)
         const string Sql = """
-            SELECT b.bucket,
-                   count(c.id),
-                   count(c.id) FILTER (WHERE c.outcome <> @success),
-                   avg(c.duration_ms) FILTER (WHERE c.outcome = @success),
-                   max(c.duration_ms) FILTER (WHERE c.outcome = @success)
+            WITH agg AS (
+                SELECT date_bin(@stride, started_at_utc, @first) AS bucket,
+                       count(*) AS checks,
+                       count(*) FILTER (WHERE outcome <> @success) AS failures,
+                       avg(duration_ms) FILTER (WHERE outcome = @success) AS avg_ms,
+                       max(duration_ms) FILTER (WHERE outcome = @success) AS max_ms
+                FROM monitor_checks
+                WHERE monitor_id = @monitor_id AND started_at_utc >= @first AND started_at_utc < @last + @stride
+                GROUP BY 1)
+            SELECT b.bucket, coalesce(agg.checks, 0), coalesce(agg.failures, 0), agg.avg_ms, agg.max_ms
             FROM generate_series(@first, @last, @stride) AS b(bucket)
-            LEFT JOIN monitor_checks c
-                   ON c.monitor_id = @monitor_id
-                  AND c.started_at_utc >= b.bucket
-                  AND c.started_at_utc < b.bucket + @stride
-            GROUP BY b.bucket
+            LEFT JOIN agg ON agg.bucket = b.bucket
             ORDER BY b.bucket
             """;
 

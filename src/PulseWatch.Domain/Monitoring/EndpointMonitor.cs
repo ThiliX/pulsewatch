@@ -315,17 +315,28 @@ public sealed class EndpointMonitor
     }
 
     /// <summary>
-    /// Called after a scheduled check's result is recorded: schedules the next check one interval after
-    /// this check started and releases the worker's lease. If the owner asked for a manual check while
-    /// this one was running, the next check stays due immediately.
+    /// Called after a scheduled check's result is recorded: schedules the next check and releases the
+    /// worker's lease. The next check is due one interval after this one was <b>due</b> (not after it
+    /// started), so the worker's polling delay doesn't add up: a 60 s monitor is checked every 60 s, not
+    /// every 60 s plus the lag. If that time has already passed (this check ran a whole interval late, e.g.
+    /// after the worker was down), this late check was the catch-up, so the next one is due one interval
+    /// after it started: no burst and no second check right away. If the owner asked for a manual check
+    /// while this one was running, the next check stays due immediately.
     /// </summary>
-    public void CompleteCheck(DateTimeOffset checkStartedAtUtc, DateTimeOffset nowUtc)
+    /// <param name="dueAtUtc">When this check was due (the claim's next_check_at); falls back to the start time.</param>
+    public void CompleteCheck(DateTimeOffset checkStartedAtUtc, DateTimeOffset nowUtc, DateTimeOffset? dueAtUtc = null)
     {
         Guard.Utc(checkStartedAtUtc);
         Guard.Utc(nowUtc);
 
         var manualRequestedDuringCheck = ManualCheckRequestedAtUtc is { } requested && requested > checkStartedAtUtc;
-        var next = checkStartedAtUtc.AddSeconds(IntervalSeconds);
+        var anchor = dueAtUtc is { } due && due <= checkStartedAtUtc ? Guard.Utc(due) : checkStartedAtUtc;
+        var next = anchor.AddSeconds(IntervalSeconds);
+        if (next <= nowUtc)
+        {
+            next = checkStartedAtUtc.AddSeconds(IntervalSeconds);
+        }
+
         NextCheckAtUtc = manualRequestedDuringCheck ? nowUtc : (next > nowUtc ? next : nowUtc);
         LeaseUntilUtc = null;
     }

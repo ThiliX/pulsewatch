@@ -1,0 +1,271 @@
+Pager usage is off.
+=== 1. Claim due monitors (scheduler, every 5 s) ===
+BEGIN
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Update on monitors m (actual time=0.452..0.797 rows=50.00 loops=1)
+   Buffers: shared hit=497 read=6 dirtied=2 written=1
+   ->  Hash Semi Join (actual time=0.133..0.197 rows=50.00 loops=1)
+         Hash Cond: (m.id = "ANY_subquery".id)
+         Buffers: shared hit=116
+         ->  Seq Scan on monitors m (actual time=0.003..0.033 rows=500.00 loops=1)
+               Buffers: shared hit=13
+         ->  Hash (actual time=0.109..0.110 rows=50.00 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 13kB
+               Buffers: shared hit=103
+               ->  Subquery Scan on "ANY_subquery" (actual time=0.029..0.097 rows=50.00 loops=1)
+                     Buffers: shared hit=103
+                     ->  Limit (actual time=0.021..0.082 rows=50.00 loops=1)
+                           Buffers: shared hit=103
+                           ->  LockRows (actual time=0.020..0.079 rows=50.00 loops=1)
+                                 Buffers: shared hit=103
+                                 ->  Index Scan using ix_monitors_due on monitors (actual time=0.016..0.032 rows=50.00 loops=1)
+                                       Index Cond: (next_check_at_utc <= (now() + '00:00:30'::interval))
+                                       Filter: (is_enabled AND ((lease_until_utc IS NULL) OR (lease_until_utc < now())))
+                                       Index Searches: 1
+                                       Buffers: shared hit=53
+ Planning:
+   Buffers: shared hit=143 read=1
+ Planning Time: 1.235 ms
+ Execution Time: 0.983 ms
+(25 rows)
+
+ROLLBACK
+=== 2a. Check history page (monitor page) ===
+                                                                                 QUERY PLAN                                                                                  
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.220..0.222 rows=20.00 loops=1)
+   Buffers: shared hit=31 read=3
+   ->  Incremental Sort (actual time=0.219..0.220 rows=20.00 loops=1)
+         Sort Key: started_at_utc DESC, id DESC
+         Presorted Key: started_at_utc
+         Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB
+         Buffers: shared hit=31 read=3
+         ->  Index Scan using ix_monitor_checks_monitor_started on monitor_checks (actual time=0.044..0.121 rows=21.00 loops=1)
+               Index Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (now() - '24:00:00'::interval)) AND (started_at_utc < now()))
+               Index Searches: 1
+               Buffers: shared hit=22 read=3
+ Planning:
+   Buffers: shared hit=81 read=3
+ Planning Time: 0.603 ms
+ Execution Time: 0.265 ms
+(15 rows)
+
+=== 2b. Check history total count, 30-day window ===
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate (actual time=12.023..12.023 rows=1.00 loops=1)
+   Buffers: shared hit=1514 read=546 written=348
+   ->  Bitmap Heap Scan on monitor_checks (actual time=0.827..11.858 rows=2000.00 loops=1)
+         Recheck Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (now() - '30 days'::interval)) AND (started_at_utc < now()))
+         Heap Blocks: exact=2041
+         Buffers: shared hit=1514 read=546 written=348
+         ->  Bitmap Index Scan on ix_monitor_checks_monitor_started (actual time=0.586..0.586 rows=2042.00 loops=1)
+               Index Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (now() - '30 days'::interval)) AND (started_at_utc < now()))
+               Index Searches: 1
+               Buffers: shared hit=3 read=16
+ Planning:
+   Buffers: shared hit=11 read=3
+ Planning Time: 0.176 ms
+ Execution Time: 12.084 ms
+(14 rows)
+
+=== 3. Uptime and p95 for 24h / 7d / 30d (one pass) ===
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate (actual time=2.899..2.900 rows=1.00 loops=1)
+   Buffers: shared hit=2068
+   ->  Bitmap Heap Scan on monitor_checks (actual time=0.668..1.750 rows=2000.00 loops=1)
+         Recheck Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (now() - '30 days'::interval)) AND (started_at_utc < now()))
+         Heap Blocks: exact=2041
+         Buffers: shared hit=2060
+         ->  Bitmap Index Scan on ix_monitor_checks_monitor_started (actual time=0.430..0.430 rows=2042.00 loops=1)
+               Index Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (now() - '30 days'::interval)) AND (started_at_utc < now()))
+               Index Searches: 1
+               Buffers: shared hit=19
+ Planning:
+   Buffers: shared hit=17
+ Planning Time: 0.206 ms
+ Execution Time: 3.007 ms
+(14 rows)
+
+=== 4. Chart series, 30 days (180 buckets of 4 h), date_bin version ===
+                                                                                                                              QUERY PLAN                                                                                                                               
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort (actual time=2.061..2.067 rows=180.00 loops=1)
+   Sort Key: b.bucket
+   Sort Method: quicksort  Memory: 35kB
+   Buffers: shared hit=2051
+   ->  Hash Right Join (actual time=1.961..2.025 rows=180.00 loops=1)
+         Hash Cond: ((date_bin('04:00:00'::interval, monitor_checks.started_at_utc, (date_trunc('hour'::text, now()) - '716:00:00'::interval))) = b.bucket)
+         Buffers: shared hit=2051
+         ->  HashAggregate (actual time=1.906..1.948 rows=180.00 loops=1)
+               Group Key: date_bin('04:00:00'::interval, monitor_checks.started_at_utc, (date_trunc('hour'::text, now()) - '716:00:00'::interval))
+               Batches: 1  Memory Usage: 81kB
+               Buffers: shared hit=2051
+               ->  Bitmap Heap Scan on monitor_checks (actual time=0.520..1.611 rows=1991.00 loops=1)
+                     Recheck Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (date_trunc('hour'::text, now()) - '716:00:00'::interval)) AND (started_at_utc < (date_trunc('hour'::text, now()) + '04:00:00'::interval)))
+                     Heap Blocks: exact=2032
+                     Buffers: shared hit=2051
+                     ->  Bitmap Index Scan on ix_monitor_checks_monitor_started (actual time=0.347..0.347 rows=2033.00 loops=1)
+                           Index Cond: ((monitor_id = '8e17eff1-2a86-4b08-9804-8da296337c85'::uuid) AND (started_at_utc >= (date_trunc('hour'::text, now()) - '716:00:00'::interval)) AND (started_at_utc < (date_trunc('hour'::text, now()) + '04:00:00'::interval)))
+                           Index Searches: 1
+                           Buffers: shared hit=19
+         ->  Hash (actual time=0.035..0.036 rows=180.00 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 16kB
+               ->  Function Scan on generate_series b (actual time=0.016..0.021 rows=180.00 loops=1)
+ Planning:
+   Buffers: shared hit=27 read=3 written=2
+ Planning Time: 0.327 ms
+ Execution Time: 2.214 ms
+(26 rows)
+
+=== 5a. Dashboard: my monitors ===
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on monitors (actual time=0.021..0.049 rows=50.00 loops=1)
+   Recheck Cond: (owner_user_id = 'user-1'::text)
+   Heap Blocks: exact=13
+   Buffers: shared hit=14
+   ->  Bitmap Index Scan on ix_monitors_owner_user_id (actual time=0.014..0.014 rows=50.00 loops=1)
+         Index Cond: (owner_user_id = 'user-1'::text)
+         Index Searches: 1
+         Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=57
+ Planning Time: 0.392 ms
+ Execution Time: 0.081 ms
+(12 rows)
+
+=== 5b. Dashboard: my open incidents ===
+                                                   QUERY PLAN                                                   
+----------------------------------------------------------------------------------------------------------------
+ Aggregate (actual time=0.087..0.088 rows=1.00 loops=1)
+   Buffers: shared hit=22
+   ->  Hash Join (actual time=0.086..0.087 rows=0.00 loops=1)
+         Hash Cond: (m.id = i.monitor_id)
+         Buffers: shared hit=22
+         ->  Bitmap Heap Scan on monitors m (actual time=0.026..0.032 rows=50.00 loops=1)
+               Recheck Cond: (owner_user_id = 'user-1'::text)
+               Heap Blocks: exact=13
+               Buffers: shared hit=14
+               ->  Bitmap Index Scan on ix_monitors_owner_user_id (actual time=0.013..0.013 rows=50.00 loops=1)
+                     Index Cond: (owner_user_id = 'user-1'::text)
+                     Index Searches: 1
+                     Buffers: shared hit=1
+         ->  Hash (actual time=0.040..0.040 rows=20.00 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 9kB
+               Buffers: shared hit=8
+               ->  Seq Scan on incidents i (actual time=0.030..0.031 rows=20.00 loops=1)
+                     Filter: (status = 0)
+                     Rows Removed by Filter: 500
+                     Buffers: shared hit=8
+ Planning:
+   Buffers: shared hit=99 read=1 written=1
+ Planning Time: 0.883 ms
+ Execution Time: 0.147 ms
+(24 rows)
+
+=== 5c. Dashboard: worker last seen ===
+                                    QUERY PLAN                                    
+----------------------------------------------------------------------------------
+ Aggregate (actual time=0.104..0.105 rows=1.00 loops=1)
+   Buffers: shared read=1 written=1
+   ->  Seq Scan on worker_heartbeats (actual time=0.101..0.102 rows=1.00 loops=1)
+         Buffers: shared read=1 written=1
+ Planning:
+   Buffers: shared hit=22
+ Planning Time: 0.204 ms
+ Execution Time: 0.113 ms
+(8 rows)
+
+=== 6. Incident list (newest first) ===
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.161..0.165 rows=25.00 loops=1)
+   Buffers: shared hit=22
+   ->  Sort (actual time=0.161..0.162 rows=25.00 loops=1)
+         Sort Key: i.opened_at_utc DESC, i.id DESC
+         Sort Method: quicksort  Memory: 31kB
+         Buffers: shared hit=22
+         ->  Hash Join (actual time=0.075..0.137 rows=50.00 loops=1)
+               Hash Cond: (i.monitor_id = m.id)
+               Buffers: shared hit=22
+               ->  Seq Scan on incidents i (actual time=0.019..0.043 rows=520.00 loops=1)
+                     Buffers: shared hit=8
+               ->  Hash (actual time=0.043..0.043 rows=50.00 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 11kB
+                     Buffers: shared hit=14
+                     ->  Bitmap Heap Scan on monitors m (actual time=0.020..0.029 rows=50.00 loops=1)
+                           Recheck Cond: (owner_user_id = 'user-1'::text)
+                           Heap Blocks: exact=13
+                           Buffers: shared hit=14
+                           ->  Bitmap Index Scan on ix_monitors_owner_user_id (actual time=0.014..0.014 rows=50.00 loops=1)
+                                 Index Cond: (owner_user_id = 'user-1'::text)
+                                 Index Searches: 1
+                                 Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=36
+ Planning Time: 0.323 ms
+ Execution Time: 0.241 ms
+(26 rows)
+
+=== 7. Retention batch (oldest 5000 beyond 29 days, so it finds rows) ===
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.024..1.263 rows=5000.00 loops=1)
+   Buffers: shared hit=38 read=50 written=42
+   ->  Index Scan using ix_monitor_checks_started_at on monitor_checks (actual time=0.024..0.962 rows=5000.00 loops=1)
+         Index Cond: (started_at_utc < (now() - '29 days'::interval))
+         Index Searches: 1
+         Buffers: shared hit=38 read=50 written=42
+ Planning Time: 0.038 ms
+ Execution Time: 1.456 ms
+(8 rows)
+
+=== 8. Outbox claim (100,005 rows, 5 due) ===
+BEGIN
+                                                                                                      QUERY PLAN                                                                                                      
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Update on notification_outbox o (actual time=0.110..0.183 rows=5.00 loops=1)
+   Buffers: shared hit=115
+   ->  Nested Loop (actual time=0.042..0.057 rows=5.00 loops=1)
+         Buffers: shared hit=34
+         ->  HashAggregate (actual time=0.028..0.029 rows=5.00 loops=1)
+               Group Key: "ANY_subquery".id
+               Batches: 1  Memory Usage: 32kB
+               Buffers: shared hit=7
+               ->  Subquery Scan on "ANY_subquery" (actual time=0.019..0.024 rows=5.00 loops=1)
+                     Buffers: shared hit=7
+                     ->  Limit (actual time=0.018..0.022 rows=5.00 loops=1)
+                           Buffers: shared hit=7
+                           ->  LockRows (actual time=0.017..0.021 rows=5.00 loops=1)
+                                 Buffers: shared hit=7
+                                 ->  Index Scan using ix_notification_outbox_due on notification_outbox (actual time=0.011..0.013 rows=5.00 loops=1)
+                                       Filter: ((status = ANY ('{0,1,3}'::integer[])) AND (((status = ANY ('{0,3}'::integer[])) AND (next_attempt_at_utc <= now())) OR ((status = 1) AND (lease_until_utc < now()))))
+                                       Index Searches: 1
+                                       Buffers: shared hit=2
+         ->  Index Scan using pk_notification_outbox on notification_outbox o (actual time=0.005..0.005 rows=1.00 loops=5)
+               Index Cond: (id = "ANY_subquery".id)
+               Index Searches: 5
+               Buffers: shared hit=24
+ Planning:
+   Buffers: shared hit=126
+ Planning Time: 0.959 ms
+ Execution Time: 0.267 ms
+(26 rows)
+
+ROLLBACK
+=== 9. Outbox pending count (dispatcher, every poll) ===
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Aggregate (actual time=0.019..0.019 rows=1.00 loops=1)
+   Buffers: shared hit=2
+   ->  Index Only Scan using ix_notification_outbox_due on notification_outbox (actual time=0.016..0.018 rows=5.00 loops=1)
+         Heap Fetches: 10
+         Index Searches: 1
+         Buffers: shared hit=2
+ Planning Time: 0.037 ms
+ Execution Time: 0.036 ms
+(8 rows)
+

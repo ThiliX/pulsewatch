@@ -117,6 +117,53 @@ public class EndpointMonitorEditingTests
     }
 
     [Fact]
+    public void The_next_check_is_one_interval_after_the_due_time_so_polling_lag_does_not_add_up()
+    {
+        var data = new MonitorTestData();
+        var due = data.Now;
+        var started = due.AddSeconds(4.7); // the worker polls every 5 s, so checks start a little late
+
+        data.Monitor.CompleteCheck(started, started.AddMilliseconds(80), dueAtUtc: due);
+
+        Assert.Equal(due.AddSeconds(60), data.Monitor.NextCheckAtUtc);
+    }
+
+    [Fact]
+    public void A_due_time_after_the_start_is_ignored()
+    {
+        var data = new MonitorTestData();
+        var started = data.Now;
+
+        data.Monitor.CompleteCheck(started, started.AddSeconds(1), dueAtUtc: started.AddSeconds(30));
+
+        Assert.Equal(started.AddSeconds(60), data.Monitor.NextCheckAtUtc);
+    }
+
+    [Fact]
+    public void After_a_long_worker_outage_the_late_check_is_the_catch_up_and_no_second_check_follows()
+    {
+        var data = new MonitorTestData();
+        var due = data.Now;
+        var started = due.AddMinutes(30);
+
+        data.Monitor.CompleteCheck(started, started.AddSeconds(1), dueAtUtc: due);
+
+        Assert.Equal(started.AddSeconds(60), data.Monitor.NextCheckAtUtc);
+    }
+
+    [Fact]
+    public void A_check_exactly_one_interval_late_does_not_cause_an_immediate_second_check()
+    {
+        var data = new MonitorTestData();
+        var due = data.Now;
+        var started = due.AddSeconds(60);
+
+        data.Monitor.CompleteCheck(started, started.AddMilliseconds(100), dueAtUtc: due);
+
+        Assert.Equal(started.AddSeconds(60), data.Monitor.NextCheckAtUtc);
+    }
+
+    [Fact]
     public void Completing_a_check_never_schedules_in_the_past()
     {
         var data = new MonitorTestData();

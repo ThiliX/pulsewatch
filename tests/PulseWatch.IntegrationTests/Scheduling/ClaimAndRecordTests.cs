@@ -133,7 +133,7 @@ public class ClaimAndRecordTests(PostgresFixture postgres)
 
         // Each step uses its own DbContext, as the worker's scopes do.
         await using var recorderDb = PostgresFixture.CreateContext(connectionString);
-        var outcome = await new CheckResultRecorder(recorderDb, TimeProvider.System).RecordAsync(claimed, Result(CheckOutcome.Success, now), Ct);
+        var outcome = (await new CheckResultRecorder(recorderDb, TimeProvider.System).RecordAsync(claimed, Result(CheckOutcome.Success, now), Ct)).Outcome;
 
         Assert.Equal(RecordOutcome.Recorded, outcome);
         await using var read = PostgresFixture.CreateContext(connectionString);
@@ -196,7 +196,7 @@ public class ClaimAndRecordTests(PostgresFixture postgres)
         });
         var outcomes = await Task.WhenAll(recorders);
 
-        Assert.All(outcomes, o => Assert.Equal(RecordOutcome.Recorded, o));
+        Assert.All(outcomes, o => Assert.Equal(RecordOutcome.Recorded, o.Outcome));
         await using var read = PostgresFixture.CreateContext(connectionString);
         var incident = await read.Incidents.SingleAsync(i => i.MonitorId == monitor.Id, Ct);
         Assert.Equal(2, incident.FailureCount);
@@ -214,7 +214,7 @@ public class ClaimAndRecordTests(PostgresFixture postgres)
         await db.Monitors.Where(m => m.Id == monitor.Id).ExecuteDeleteAsync(Ct);
 
         await using var recorderDb = PostgresFixture.CreateContext(connectionString);
-        var outcome = await new CheckResultRecorder(recorderDb, TimeProvider.System).RecordAsync(claimed, Result(CheckOutcome.Success, Now()), Ct);
+        var outcome = (await new CheckResultRecorder(recorderDb, TimeProvider.System).RecordAsync(claimed, Result(CheckOutcome.Success, Now()), Ct)).Outcome;
 
         Assert.Equal(RecordOutcome.MonitorDeleted, outcome);
         Assert.Equal(0, await recorderDb.MonitorChecks.CountAsync(Ct));
@@ -237,7 +237,7 @@ public class ClaimAndRecordTests(PostgresFixture postgres)
         }
 
         await using var recorderDb = PostgresFixture.CreateContext(connectionString);
-        var outcome = await new CheckResultRecorder(recorderDb, TimeProvider.System).RecordAsync(claimed, Result(CheckOutcome.HttpStatusFailure, now), Ct);
+        var outcome = (await new CheckResultRecorder(recorderDb, TimeProvider.System).RecordAsync(claimed, Result(CheckOutcome.HttpStatusFailure, now), Ct)).Outcome;
 
         Assert.Equal(RecordOutcome.UrlChanged, outcome);
         Assert.Equal(0, await recorderDb.MonitorChecks.CountAsync(Ct));

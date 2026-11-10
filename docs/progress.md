@@ -230,3 +230,52 @@ One entry per milestone: what was built, how it was verified, and what is left.
   - pause; delete with confirm (Escape cancels);
   - phone width (375 px) with no sideways scrolling; sign-out, after which protected pages redirect to sign-in.
   - The only console error was the intentional 429.
+
+## Milestone 7 — Metrics and operations (10 Nov 2026)
+
+The uptime, p95 and chart queries planned for M7 were already built in M6 (see above). M7 added:
+
+**Built**
+- **`PulseWatch` meter** (`PulseWatchMetrics`):
+  - `pulsewatch.checks.completed{outcome}` and `pulsewatch.check.duration{outcome}`;
+  - `pulsewatch.worker.lag` (claim time minus due time; the claim now returns `next_check_at_utc`);
+  - `pulsewatch.incidents.opened` / `.resolved`;
+  - `pulsewatch.notifications.sent` / `.failed{category}` / `.exhausted{category}`;
+  - `pulsewatch.outbox.pending` (a gauge refreshed on each dispatcher poll);
+  - `pulsewatch.retention.deleted_checks`.
+- **Optional OpenTelemetry export** (1.20.1): set `Telemetry:OtlpEndpoint` to send metrics and traces over OTLP. Off by default.
+- **Tracing and log scopes:**
+  - Each check and each email delivery runs in an Activity. If no exporter is listening, a plain Activity is started anyway, so log lines still share a `TraceId`.
+  - Check log scopes carry `MonitorId`, `CheckId` (the recorder now returns `RecordResult` with the check id and incident change) and `Target` = `LogRedaction.UrlOrigin` (scheme + host only).
+  - Email log scopes carry `MessageId` and `Attempt`.
+  - A new warning line is written when an incident opens or resolves.
+- **Structured logs:** JSON console logs (UTC, scopes) by default outside Development; the readable simple format in Development.
+- **The Logging email sender no longer logs email bodies.** They contain the endpoint path, which would break the "scheme + host only" rule. It logs the recipient and subject; Mailpit shows full emails.
+- **`RetentionService`:**
+  - Daily (`Retention:IntervalHours`), first run 2 minutes after start.
+  - Deletes checks older than `CheckRetentionDays` in batches of 5,000 with a pause between batches, at most 2,000 batches per run.
+  - Never touches incidents or emails. A failed run is logged and retried next interval.
+  - New index `ix_monitor_checks_started_at` (migration `AddCheckStartedAtIndex`).
+- **`seed-demo`** (`dotnet run --project src/PulseWatch.Api -- seed-demo`, Development only):
+  - Creates `demo@pulsewatch.localhost` with 4 monitors on the IANA example domains and 7 days of 5-minute history.
+  - The history is replayed through `EndpointMonitor.ApplyCheckResult`, so states, incidents (3, all resolved) and sent emails (6) are consistent.
+  - Re-running replaces the data and prints a new password.
+- **Query plan review** with 1 M checks and 100 k notification rows: [docs/query-plans.md](query-plans.md); scripts and raw output in `docs/perf/`. Two fixes came out of it:
+  - Chart series rewritten with `date_bin`: 29 ms → 2.2 ms, and it no longer compares every bucket with every check.
+  - Email-claim partial index widened to Pending/Sending/Failed, with a matching `status IN` filter (migration `WidenOutboxDueIndex`): a full scan of the ever-growing outbox → index scan, 0.3 ms.
+- **Load test** (`tests/PulseWatch.LoadTest`, a console tool with Testcontainers and a local target; loopback allowed through DI only): [docs/load-test.md](load-test.md).
+  - 500 monitors at 60 s on one worker: about 4.5 % of one core, 177 MB, 0 failures, about 340 bytes per check.
+  - 30 days at that load is about 6.8 GB.
+- **Scheduling fix found by the load test:**
+  - The next check used to be due "started + interval", so polling lag added up each cycle. A 60 s monitor really ran about every 65 s, and lag crept to about 5 s.
+  - It is now "due + interval": measured 59.92 s between checks, lag p50 about 1.9 s.
+  - If a check ran a whole interval late, that late check counts as the catch-up and the next one is due an interval after it started. The first version scheduled an immediate catch-up, and the existing scheduler test caught the double check.
+
+**Tests (437 .NET tests: 310 unit, 127 integration; 40 frontend tests unchanged; all passing)**
+- Unit: URL redaction (path, query, user info and default port removed); scheduling from the due time, a due time after the start ignored, and no double check after a late run.
+- Integration:
+  - **Telemetry:** a real worker host with a scripted probe; a `MeterListener` on that host's meter checks the checks-completed outcome tag, the duration, a lag of about 120 s for a monitor due 2 minutes earlier, incidents opened, notifications sent and the outbox gauge. Captured logs (now with scopes) check `MonitorId`, `CheckId`, `TraceId` and `Target=https://api.example.com`, and that neither the secret path nor the query string appears anywhere.
+  - **Retention:** 250 old checks deleted in batches of 100; recent checks kept (including 29-day-old ones); a 60-day-old incident and its email survive; a second run deletes 0; an empty database is fine; `EXPLAIN` shows the batch uses `ix_monitor_checks_started_at`.
+  - **Seed demo:** run twice (data replaced, not doubled, new password); about 8,064 checks; 3 resolved incidents with 6 sent emails; all monitors Healthy; the printed credentials sign in; the dashboard and stats show the seeded outage. Refused (exit code 1, nothing printed) outside Development.
+- The integration suite ran 3 times in a row green; `dotnet format` is clean.
+- Manual: `seed-demo` against the local dev database applied the two new migrations and seeded 4 monitors, 8,064 checks and 3 incidents.

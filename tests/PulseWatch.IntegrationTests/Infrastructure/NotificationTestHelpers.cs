@@ -54,31 +54,56 @@ internal sealed class ScriptedEmailSender : IEmailSender
     }
 }
 
-/// <summary>Collects every log line (with exception details) so tests can assert on what was logged.</summary>
-internal sealed class CapturingLoggerProvider : ILoggerProvider
+/// <summary>
+/// Collects every log line, with its scopes (as "Key=Value" pairs, including the host's TraceId scope)
+/// and exception details, so tests can assert on what was logged.
+/// </summary>
+internal sealed class CapturingLoggerProvider : ILoggerProvider, ISupportExternalScope
 {
     private readonly ConcurrentQueue<string> _lines = new();
+    private IExternalScopeProvider _scopes = new LoggerExternalScopeProvider();
 
     public IReadOnlyCollection<string> Lines => _lines;
 
     public string AllText => string.Join('\n', _lines);
 
-    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, _lines);
+    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, this);
+
+    public void SetScopeProvider(IExternalScopeProvider scopeProvider) => _scopes = scopeProvider;
 
     public void Dispose()
     {
     }
 
-    private sealed class Logger(string category, ConcurrentQueue<string> lines) : ILogger
+    private sealed class Logger(string category, CapturingLoggerProvider owner) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull => null;
+            where TState : notnull => owner._scopes.Push(state);
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
         public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            lines.Enqueue($"{logLevel} {category}: {formatter(state, exception)} {exception}");
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var scopes = new System.Text.StringBuilder();
+            owner._scopes.ForEachScope(
+                (scope, sb) =>
+                {
+                    if (scope is IEnumerable<KeyValuePair<string, object?>> pairs)
+                    {
+                        foreach (var (key, value) in pairs)
+                        {
+                            sb.Append(key).Append('=').Append(value).Append(' ');
+                        }
+                    }
+                    else
+                    {
+                        sb.Append(scope).Append(' ');
+                    }
+                },
+                scopes);
+            owner._lines.Enqueue($"{logLevel} {category}: {formatter(state, exception)} [{scopes}] {exception}");
+        }
     }
 }
 

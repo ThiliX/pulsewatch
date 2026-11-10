@@ -4,7 +4,7 @@
 
 PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a schedule, records status and response time, opens an incident when failures persist, emails you when it starts and when it recovers, and shows the history in a dashboard.
 
-> **Status: Milestone 6 (web app).** Sign up in the browser, add monitors, and watch their state, uptime, response times, check history and incidents. PulseWatch emails you when an incident opens and when it recovers. Metrics for operators, retention cleanup and the production release come in Milestones 7–8. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
+> **Status: Milestone 7 (operations).** Sign up in the browser, add monitors, and watch their state, uptime, response times, check history and incidents. PulseWatch emails you when an incident opens and when it recovers. For operators it has metrics, structured logs, automatic cleanup of old checks, a demo-data command, and documented query plans and load-test results. The production release (hardening, Docker images, deployment guide) comes in Milestone 8. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
 
 ## What works today
 
@@ -26,6 +26,7 @@ PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a
 | Email alerts | ✅ one email when an incident opens and one when it recovers, written to an outbox in the same transaction as the incident; retries with backoff; delivery status on the incident |
 | Web app | ✅ sign up / sign in; dashboard with summary counts, open incidents and a "worker offline" banner; monitor list (cards on phones, table on wider screens) with state filter; add/edit form with server errors shown on the fields; monitor page with uptime and p95 for 24 h / 7 d / 30 d, a response-time chart, check history and incidents; pause, resume, check now and delete with confirmation; incident list and detail with timeline and email delivery status |
 | Uptime, p95 and chart data | ✅ sampled uptime (never "100 %" without data), p95 of successful checks, bucketed chart series, dashboard summary |
+| Operations | ✅ `PulseWatch` metrics meter with optional OTLP export, JSON logs with monitor/check/trace ids, daily cleanup of checks older than 30 days, `seed-demo` command, [query plan review](docs/query-plans.md), [load test](docs/load-test.md) |
 
 ## Architecture
 
@@ -162,7 +163,7 @@ The worker (`src/PulseWatch.Worker`) polls every `Monitoring:PollIntervalSeconds
 
 1. It **leases** up to `BatchSize` (50) enabled monitors that are due, in one SQL statement (`FOR UPDATE SKIP LOCKED`). A leased monitor can't be picked up by another worker until its result is recorded or the lease expires (probe timeout + 30 s), so a crashed worker never leaves a monitor stuck.
 2. It **probes** them, at most `MaxConcurrentChecks` (10) at a time. Each probe is one `GET` with the monitor's timeout covering everything, no cookies or credentials, at most `MaxRedirects` (3) redirects (each re-validated), and at most `MaxResponseBytes` (64 KB) of body read.
-3. It **records** each result in one transaction: the check row, the monitor's state and counters, an incident if the failure threshold is reached (or its resolution), the alert email for that incident event (an outbox row), and the next check time (one interval after this check started).
+3. It **records** each result in one transaction: the check row, the monitor's state and counters, an incident if the failure threshold is reached (or its resolution), the alert email for that incident event (an outbox row), and the next check time: one interval after this check was **due**, so the polling delay never adds up (a 60 s monitor is checked every 60 s). If a check ran a whole interval late (for example after the worker was down), that late check counts as the catch-up and the next one is due an interval after it: no burst, no double check.
 
 Outcomes: `Success`, `HttpStatusFailure`, `Timeout`, `DnsFailure`, `TlsFailure`, `ConnectionFailure`, `RedirectRejected`, `DestinationBlocked`, `UnexpectedError`. Stored error summaries are fixed text, never exception messages or response content.
 
@@ -185,7 +186,7 @@ Delivery is **at least once**: if the worker stops after the mail server accepte
 
 **Providers** (`Notifications:Provider`):
 
-- `Logging` (the default) writes each email to the worker log instead of sending it.
+- `Logging` (the default) logs the recipient and subject of each email instead of sending it. The body is not logged, because it contains the endpoint's path; use Mailpit to read full emails.
 - `Smtp` sends through the server in the `Email` section. To try it locally with Mailpit:
 
   ```powershell
@@ -199,6 +200,40 @@ Delivery is **at least once**: if the worker stops after the mail server accepte
   Then open the inbox at <http://localhost:8025>. For a real provider, keep `UseStartTls` at `true` (the default) or use port 465, and put `Email:Username` and `Email:Password` in user-secrets or environment variables. PulseWatch never logs them.
 
 Links in emails point at `App:PublicBaseUrl` (default `http://localhost:5173`).
+
+## Operations
+
+### Demo data
+
+```powershell
+dotnet run --project src/PulseWatch.Api -- seed-demo
+```
+
+This creates the account `demo@pulsewatch.localhost` with four monitors and a week of history, including a resolved outage with its emails, and prints a one-time password. The history is replayed through the real incident logic, so states, incidents and emails are consistent. The monitors point at the IANA example domains (`example.com` and friends), which exist for this purpose; with the worker running they keep being checked every 5 minutes. Running it again replaces the demo monitors and sets a new password. It only works in Development.
+
+### Metrics
+
+The worker records these on the `PulseWatch` meter (`System.Diagnostics.Metrics`):
+
+| Instrument | Type | Meaning |
+|---|---|---|
+| `pulsewatch.checks.completed` | counter, tag `outcome` | checks recorded |
+| `pulsewatch.check.duration` | histogram, ms, tag `outcome` | probe duration |
+| `pulsewatch.worker.lag` | histogram, s | how late a check was claimed after its due time; the key "is the worker keeping up?" signal |
+| `pulsewatch.incidents.opened` / `.resolved` | counters | incident changes |
+| `pulsewatch.notifications.sent` / `.failed` / `.exhausted` | counters, tag `category` on the last two | email delivery |
+| `pulsewatch.outbox.pending` | gauge | emails waiting to be sent or retried |
+| `pulsewatch.retention.deleted_checks` | counter | old checks removed |
+
+Nothing is exported by default. To send metrics and traces to an OpenTelemetry Collector (and on to Prometheus, Grafana, etc.), set `Telemetry__OtlpEndpoint`, for example `http://localhost:4317`, on the worker and the API. Without a collector you can watch the meter live with `dotnet-counters monitor -n PulseWatch.Worker --counters PulseWatch`.
+
+### Logs
+
+Outside Development both hosts write **one JSON object per line** to the console, with UTC timestamps and scopes, ready for a log collector. Every line about a check carries `MonitorId`, `CheckId`, `TraceId` and `Target`. `Target` is the URL's **scheme and host only**: paths and query strings often contain tokens and never reach the logs. Email lines carry `MessageId` and `Attempt`. Development keeps the readable text format; switch with `Logging__Console__FormatterName=json` or `simple`.
+
+### Retention
+
+The worker deletes checks older than `Monitoring:CheckRetentionDays` (30) once a day (`Retention:IntervalHours`, 24), starting 2 minutes after it starts. It deletes in batches of `Retention:BatchSize` (5,000) with a short pause between them, so cleanup never blocks checks for long. Incidents and email history are never deleted by retention. The batches use the `ix_monitor_checks_started_at` index (see the [query plan review](docs/query-plans.md)).
 
 ## Database migrations
 

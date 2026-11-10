@@ -11,6 +11,7 @@ public static class SchedulingSetup
         services.AddScoped<IMonitorClaimer, MonitorClaimer>();
         services.AddScoped<ICheckResultRecorder, CheckResultRecorder>();
         services.AddScoped<IWorkerHeartbeatStore, WorkerHeartbeatStore>();
+        services.AddScoped<ICheckRetentionStore, CheckRetentionStore>();
         return services;
     }
 }

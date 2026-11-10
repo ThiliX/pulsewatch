@@ -16,6 +16,9 @@ public interface INotificationOutboxStore
     Task<IReadOnlyList<ClaimedNotification>> ClaimDueAsync(
         DateTimeOffset nowUtc, int batchSize, TimeSpan lease, int maxAttempts, CancellationToken cancellationToken);
 
+    /// <summary>Messages still to be delivered: pending, being sent, or waiting for a retry.</summary>
+    Task<long> CountPendingAsync(CancellationToken cancellationToken);
+
     /// <summary>The data for the email, or null if the message (or its incident or monitor) was deleted.</summary>
     Task<NotificationEmailData?> LoadEmailDataAsync(Guid messageId, CancellationToken cancellationToken);
 

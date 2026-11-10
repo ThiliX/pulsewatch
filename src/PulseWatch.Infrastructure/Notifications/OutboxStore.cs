@@ -35,8 +35,10 @@ internal sealed class OutboxStore(PulseWatchDbContext db) : INotificationOutboxS
             lease_until_utc = @lease_until
         WHERE o.id IN (
             SELECT id FROM notification_outbox
-            WHERE (status IN ({Pending}, {Failed}) AND next_attempt_at_utc <= @now)
-               OR (status = {Sending} AND lease_until_utc < @now)
+            -- The first condition matches the partial index ix_notification_outbox_due.
+            WHERE status IN ({Pending}, {Sending}, {Failed})
+              AND ((status IN ({Pending}, {Failed}) AND next_attempt_at_utc <= @now)
+                   OR (status = {Sending} AND lease_until_utc < @now))
             ORDER BY next_attempt_at_utc
             LIMIT @batch_size
             FOR UPDATE SKIP LOCKED)
@@ -90,6 +92,11 @@ internal sealed class OutboxStore(PulseWatchDbContext db) : INotificationOutboxS
             }
         }
     }
+
+    public Task<long> CountPendingAsync(CancellationToken cancellationToken) =>
+        db.NotificationOutbox.LongCountAsync(
+            m => m.Status == NotificationStatus.Pending || m.Status == NotificationStatus.Sending || m.Status == NotificationStatus.Failed,
+            cancellationToken);
 
     public Task<NotificationEmailData?> LoadEmailDataAsync(Guid messageId, CancellationToken cancellationToken) =>
         (from message in db.NotificationOutbox

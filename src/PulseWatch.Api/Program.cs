@@ -17,6 +17,7 @@ using PulseWatch.Application.Security;
 using PulseWatch.Infrastructure.Metrics;
 using PulseWatch.Infrastructure.Network;
 using PulseWatch.Infrastructure.Persistence;
+using PulseWatch.Infrastructure.Telemetry;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,6 +32,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddPulseWatchPersistence(builder.Configuration);
 builder.Services.AddPulseWatchNetwork();
 builder.Services.AddScoped<MonitorMetricsQueries>();
+builder.Services.AddPulseWatchTelemetry(builder.Configuration, "pulsewatch-api");
 builder.Services.AddSingleton<IDestinationValidator>(sp => new DestinationValidator(
     sp.GetRequiredService<IDnsResolver>(),
     sp.GetRequiredService<IOptions<MonitoringOptions>>().Value.AllowedPorts));
@@ -54,6 +56,11 @@ var app = builder.Build();
 if (MigrateCommand.IsRequested(args))
 {
     return await MigrateCommand.RunAsync(app);
+}
+
+if (SeedDemoCommand.IsRequested(args))
+{
+    return await SeedDemoCommand.RunAsync(app, Console.Out);
 }
 
 app.UseExceptionHandler();
