@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using PulseWatch.Domain.Common;
 
 namespace PulseWatch.Application.Options;
 
@@ -87,7 +88,7 @@ public sealed class AppOptions : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (!Uri.TryCreate(PublicBaseUrl, UriKind.Absolute, out var uri)
+        if (!AbsoluteUrl.TryParse(PublicBaseUrl, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
             || !string.IsNullOrEmpty(uri.Query)
             || !string.IsNullOrEmpty(uri.Fragment))

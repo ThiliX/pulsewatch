@@ -12,7 +12,7 @@ public static class MonitorUrl
     {
         var text = Guard.Text(value, MonitorLimits.UrlMaxLength, "Url");
 
-        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
+        if (!AbsoluteUrl.TryParse(text, out var uri))
         {
             throw new DomainException("Url must be an absolute URL.");
         }

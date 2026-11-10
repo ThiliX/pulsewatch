@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using PulseWatch.Domain.Common;
 using PulseWatch.Domain.Monitoring;
 using PulseWatch.Domain.Notifications;
 
@@ -99,7 +100,7 @@ public static class NotificationEmailBuilder
     /// <summary>scheme://host[:port]/path, without query string, fragment or user info.</summary>
     public static string DisplayUrl(string url)
     {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        if (!AbsoluteUrl.TryParse(url, out var uri))
         {
             return "(invalid URL)";
         }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using PulseWatch.Domain.Common;
 
 namespace PulseWatch.Infrastructure.Telemetry;
 
@@ -28,7 +29,7 @@ public static class TelemetrySetup
             return services;
         }
 
-        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var otlp))
+        if (!AbsoluteUrl.TryParse(endpoint, out var otlp))
         {
             throw new InvalidOperationException($"{OtlpEndpointKey} must be an absolute URL, e.g. http://localhost:4317.");
         }
