@@ -26,7 +26,7 @@ internal sealed class MonitorClaimer(PulseWatchDbContext db) : IMonitorClaimer
             ORDER BY next_check_at_utc
             LIMIT @batch_size
             FOR UPDATE SKIP LOCKED)
-        RETURNING m.id, m.url, m.timeout_ms, m.expected_status_min, m.expected_status_max
+        RETURNING m.id, m.url, m.timeout_ms, m.expected_status_min, m.expected_status_max, m.next_check_at_utc
         """;
 
     public async Task<IReadOnlyList<ClaimedMonitor>> ClaimDueAsync(
@@ -54,7 +54,8 @@ internal sealed class MonitorClaimer(PulseWatchDbContext db) : IMonitorClaimer
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 claimed.Add(new ClaimedMonitor(
-                    reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4)));
+                    reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4),
+                    reader.GetFieldValue<DateTimeOffset>(5)));
             }
 
             return claimed;

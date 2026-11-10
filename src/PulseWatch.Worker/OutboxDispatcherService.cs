@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using PulseWatch.Application.Notifications;
 using PulseWatch.Application.Options;
 using PulseWatch.Domain.Notifications;
+using PulseWatch.Infrastructure.Telemetry;
 
 namespace PulseWatch.Worker;
 
@@ -22,6 +24,7 @@ public sealed partial class OutboxDispatcherService(
     IOptions<NotificationOptions> options,
     IOptions<AppOptions> appOptions,
     TimeProvider time,
+    PulseWatchMetrics metrics,
     ILogger<OutboxDispatcherService> logger) : BackgroundService
 {
     private static readonly TimeSpan LeaseMargin = TimeSpan.FromSeconds(60);
@@ -89,7 +92,9 @@ public sealed partial class OutboxDispatcherService(
         var scope = scopes.CreateAsyncScope();
         await using (scope.ConfigureAwait(false))
         {
-            batch = await scope.ServiceProvider.GetRequiredService<INotificationOutboxStore>()
+            var store = scope.ServiceProvider.GetRequiredService<INotificationOutboxStore>();
+            metrics.OutboxPending(await store.CountPendingAsync(stoppingToken).ConfigureAwait(false));
+            batch = await store
                 .ClaimDueAsync(time.GetUtcNow(), settings.BatchSize, lease, settings.MaxAttempts, stoppingToken)
                 .ConfigureAwait(false);
         }
@@ -111,6 +116,14 @@ public sealed partial class OutboxDispatcherService(
 
     private async Task DeliverAsync(ClaimedNotification claimed, NotificationOptions settings)
     {
+        using var activity = PulseWatchMetrics.ActivitySource.StartActivity("pulsewatch.notification")
+            ?? new Activity("pulsewatch.notification").Start();
+        using var logScope = logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["MessageId"] = claimed.Id,
+            ["Attempt"] = claimed.AttemptCount,
+        });
+
         try
         {
             var scope = scopes.CreateAsyncScope();
@@ -147,6 +160,7 @@ public sealed partial class OutboxDispatcherService(
                 if (category is null)
                 {
                     await store.MarkSentAsync(claimed, now, CancellationToken.None).ConfigureAwait(false);
+                    metrics.NotificationSent();
                     LogSent(logger, claimed.Id, data.EventType, data.IncidentId, claimed.AttemptCount);
                     return;
                 }
@@ -154,7 +168,9 @@ public sealed partial class OutboxDispatcherService(
                 var delay = RetryBackoff.For(claimed.AttemptCount, Random.Shared.NextDouble());
                 await store.MarkFailedAsync(claimed, now, category, permanent, settings.MaxAttempts, delay, CancellationToken.None)
                     .ConfigureAwait(false);
-                if (permanent || claimed.AttemptCount >= settings.MaxAttempts)
+                var exhausted = permanent || claimed.AttemptCount >= settings.MaxAttempts;
+                metrics.NotificationFailed(category, exhausted);
+                if (exhausted)
                 {
                     LogExhausted(logger, claimed.Id, data.IncidentId, claimed.AttemptCount, category);
                 }

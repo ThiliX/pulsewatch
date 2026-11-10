@@ -4,6 +4,7 @@ using PulseWatch.Infrastructure.Notifications;
 using PulseWatch.Infrastructure.Persistence;
 using PulseWatch.Infrastructure.Probing;
 using PulseWatch.Infrastructure.Scheduling;
+using PulseWatch.Infrastructure.Telemetry;
 
 namespace PulseWatch.Worker;
 
@@ -20,6 +21,10 @@ public static class WorkerSetup
             .ValidateOnStart();
         services.AddOptions<HeartbeatOptions>()
             .Bind(configuration.GetSection(HeartbeatOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddOptions<RetentionOptions>()
+            .Bind(configuration.GetSection(RetentionOptions.SectionName))
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.AddOptions<AppOptions>()
@@ -50,10 +55,12 @@ public static class WorkerSetup
         services.AddPulseWatchProbing();
         services.AddPulseWatchScheduling();
         services.AddPulseWatchNotifications(provider);
+        services.AddPulseWatchTelemetry(configuration, "pulsewatch-worker");
 
         services.AddHostedService<HeartbeatService>();
         services.AddHostedService<SchedulerService>();
         services.AddHostedService<OutboxDispatcherService>();
+        services.AddHostedService<RetentionService>();
 
         // In-flight checks get time to finish and be recorded (probe timeout is at most 15 s).
         services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));

@@ -23,7 +23,7 @@ public class OutboxRecordingTests(PostgresFixture postgres)
         await using var db = PostgresFixture.CreateContext(connectionString);
         var recorder = new CheckResultRecorder(db, new ManualTimeProvider(at.AddSeconds(1)));
         var claimed = new ClaimedMonitor(monitor.Id, monitor.Url, monitor.TimeoutMs, monitor.ExpectedStatusMin, monitor.ExpectedStatusMax);
-        Assert.Equal(RecordOutcome.Recorded, await recorder.RecordAsync(claimed, Result(outcome, at), Ct));
+        Assert.Equal(RecordOutcome.Recorded, (await recorder.RecordAsync(claimed, Result(outcome, at), Ct)).Outcome);
     }
 
     private static async Task<List<NotificationOutboxMessage>> MessagesAsync(string connectionString)

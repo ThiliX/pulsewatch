@@ -6,6 +6,7 @@ using PulseWatch.Domain.Monitoring;
 using PulseWatch.Domain.Notifications;
 using PulseWatch.Infrastructure.Notifications;
 using PulseWatch.Infrastructure.Persistence;
+using PulseWatch.Infrastructure.Telemetry;
 
 namespace PulseWatch.Infrastructure.Scheduling;
 
@@ -16,9 +17,10 @@ namespace PulseWatch.Infrastructure.Scheduling;
 /// event can't be committed without its notification, or the other way round.
 /// The monitor row is locked first, so an API edit or another worker can't interleave.
 /// </summary>
-internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider time) : ICheckResultRecorder
+internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider time, PulseWatchMetrics? metrics = null)
+    : ICheckResultRecorder
 {
-    public async Task<RecordOutcome> RecordAsync(ClaimedMonitor claimed, ProbeResult result, CancellationToken cancellationToken)
+    public async Task<RecordResult> RecordAsync(ClaimedMonitor claimed, ProbeResult result, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(claimed);
         ArgumentNullException.ThrowIfNull(result);
@@ -31,7 +33,7 @@ internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider t
         var monitor = await db.Monitors.SingleOrDefaultAsync(m => m.Id == claimed.Id, cancellationToken).ConfigureAwait(false);
         if (monitor is null)
         {
-            return RecordOutcome.MonitorDeleted;
+            return new RecordResult(RecordOutcome.MonitorDeleted);
         }
 
         if (!string.Equals(monitor.Url, claimed.Url, StringComparison.Ordinal))
@@ -40,7 +42,7 @@ internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider t
             monitor.ReleaseLease();
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return RecordOutcome.UrlChanged;
+            return new RecordResult(RecordOutcome.UrlChanged);
         }
 
         var check = MonitorCheck.Create(
@@ -63,7 +65,7 @@ internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider t
         }
 
         var now = time.GetUtcNow();
-        monitor.CompleteCheck(check.StartedAtUtc, now);
+        monitor.CompleteCheck(check.StartedAtUtc, now, claimed.DueAtUtc);
         db.MonitorChecks.Add(check);
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -75,7 +77,23 @@ internal sealed class CheckResultRecorder(PulseWatchDbContext db, TimeProvider t
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return RecordOutcome.Recorded;
+
+        var change = evaluation.Transition switch
+        {
+            IncidentTransition.Opened => IncidentChange.Opened,
+            IncidentTransition.Resolved => IncidentChange.Resolved,
+            _ => IncidentChange.None,
+        };
+        if (change == IncidentChange.Opened)
+        {
+            metrics?.IncidentOpened();
+        }
+        else if (change == IncidentChange.Resolved)
+        {
+            metrics?.IncidentResolved();
+        }
+
+        return new RecordResult(RecordOutcome.Recorded, check.Id, change);
     }
 
     /// <summary>MVP: one email to the monitor's owner per incident event.</summary>

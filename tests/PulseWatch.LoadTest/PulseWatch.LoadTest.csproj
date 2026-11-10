@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Load-test harness (not a test project, never shipped): runs the real worker against a local HTTP server
+    in a throwaway PostgreSQL container. See docs/load-test.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PulseWatch.Worker\PulseWatch.Worker.csproj" />
+    <ProjectReference Include="..\..\src\PulseWatch.Infrastructure\PulseWatch.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

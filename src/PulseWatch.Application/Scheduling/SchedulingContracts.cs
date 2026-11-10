@@ -3,7 +3,9 @@ using PulseWatch.Application.Probing;
 namespace PulseWatch.Application.Scheduling;
 
 /// <summary>A due monitor that this worker has leased and must check.</summary>
-public sealed record ClaimedMonitor(Guid Id, string Url, int TimeoutMs, int ExpectedStatusMin, int ExpectedStatusMax);
+/// <param name="DueAtUtc">When the check was due; the gap to the claim time is the worker's lag.</param>
+public sealed record ClaimedMonitor(
+    Guid Id, string Url, int TimeoutMs, int ExpectedStatusMin, int ExpectedStatusMax, DateTimeOffset? DueAtUtc = null);
 
 public interface IMonitorClaimer
 {
@@ -27,10 +29,20 @@ public enum RecordOutcome
     UrlChanged = 2,
 }
 
+/// <summary>What recording did, and the stored check's id when it was saved.</summary>
+public sealed record RecordResult(RecordOutcome Outcome, Guid? CheckId = null, IncidentChange IncidentChange = IncidentChange.None);
+
+public enum IncidentChange
+{
+    None = 0,
+    Opened = 1,
+    Resolved = 2,
+}
+
 public interface ICheckResultRecorder
 {
     /// <summary>Saves one probe result and applies it to the monitor (state, incidents, next check) in one transaction.</summary>
-    Task<RecordOutcome> RecordAsync(ClaimedMonitor claimed, ProbeResult result, CancellationToken cancellationToken);
+    Task<RecordResult> RecordAsync(ClaimedMonitor claimed, ProbeResult result, CancellationToken cancellationToken);
 }
 
 public interface IWorkerHeartbeatStore

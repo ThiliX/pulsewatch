@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using PulseWatch.Application.Options;
 using PulseWatch.Application.Probing;
 using PulseWatch.Application.Scheduling;
+using PulseWatch.Application.Telemetry;
 using PulseWatch.Domain.Monitoring;
+using PulseWatch.Infrastructure.Telemetry;
 
 namespace PulseWatch.Worker;
 
@@ -20,6 +23,7 @@ public sealed partial class SchedulerService(
     IServiceScopeFactory scopes,
     IOptions<MonitoringOptions> options,
     TimeProvider time,
+    PulseWatchMetrics metrics,
     ILogger<SchedulerService> logger) : BackgroundService
 {
     private static readonly TimeSpan LeaseMargin = TimeSpan.FromSeconds(30);
@@ -77,12 +81,21 @@ public sealed partial class SchedulerService(
     private async Task<int> RunBatchAsync(MonitoringOptions settings, TimeSpan lease, CancellationToken stoppingToken)
     {
         IReadOnlyList<ClaimedMonitor> batch;
+        var claimedAt = time.GetUtcNow();
         var scope = scopes.CreateAsyncScope();
         await using (scope.ConfigureAwait(false))
         {
             batch = await scope.ServiceProvider.GetRequiredService<IMonitorClaimer>()
-                .ClaimDueAsync(time.GetUtcNow(), settings.BatchSize, lease, stoppingToken)
+                .ClaimDueAsync(claimedAt, settings.BatchSize, lease, stoppingToken)
                 .ConfigureAwait(false);
+        }
+
+        foreach (var monitor in batch)
+        {
+            if (monitor.DueAtUtc is { } due)
+            {
+                metrics.CheckClaimed(claimedAt - due);
+            }
         }
 
         if (batch.Count == 0)
@@ -104,6 +117,19 @@ public sealed partial class SchedulerService(
 
     private async Task ProcessAsync(ClaimedMonitor monitor)
     {
+        // One span per check. Without a tracing exporter nothing listens to the ActivitySource, so a plain
+        // Activity is started instead: it still gives every log line of this check the same TraceId.
+        using var activity = PulseWatchMetrics.ActivitySource.StartActivity("pulsewatch.check")
+            ?? new Activity("pulsewatch.check").Start();
+        activity.SetTag("pulsewatch.monitor_id", monitor.Id);
+
+        // The URL is logged as scheme + host only; paths and query strings can hold secrets.
+        using var logScope = logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["MonitorId"] = monitor.Id,
+            ["Target"] = LogRedaction.UrlOrigin(monitor.Url),
+        });
+
         try
         {
             var scope = scopes.CreateAsyncScope();
@@ -117,7 +143,19 @@ public sealed partial class SchedulerService(
 
                 var recorder = scope.ServiceProvider.GetRequiredService<ICheckResultRecorder>();
                 var recorded = await recorder.RecordAsync(monitor, result, CancellationToken.None).ConfigureAwait(false);
-                LogChecked(logger, monitor.Id, result.Outcome, result.HttpStatusCode, result.DurationMs, recorded);
+                if (recorded.Outcome == RecordOutcome.Recorded)
+                {
+                    metrics.CheckCompleted(result.Outcome, result.DurationMs);
+                }
+
+                using (logger.BeginScope(new Dictionary<string, object?> { ["CheckId"] = recorded.CheckId }))
+                {
+                    LogChecked(logger, monitor.Id, result.Outcome, result.HttpStatusCode, result.DurationMs, recorded.Outcome);
+                    if (recorded.IncidentChange != IncidentChange.None)
+                    {
+                        LogIncidentChanged(logger, monitor.Id, recorded.IncidentChange);
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -142,6 +180,9 @@ public sealed partial class SchedulerService(
         Message = "Checked monitor {MonitorId}: {Outcome} {StatusCode} in {DurationMs} ms ({RecordOutcome})")]
     private static partial void LogChecked(
         ILogger logger, Guid monitorId, CheckOutcome outcome, int? statusCode, int durationMs, RecordOutcome recordOutcome);
+
+    [LoggerMessage(EventId = 2006, Level = LogLevel.Warning, Message = "Incident {IncidentChange} for monitor {MonitorId}")]
+    private static partial void LogIncidentChanged(ILogger logger, Guid monitorId, IncidentChange incidentChange);
 
     [LoggerMessage(EventId = 2004, Level = LogLevel.Error, Message = "Check of monitor {MonitorId} failed inside PulseWatch; it will be retried after its lease expires")]
     private static partial void LogCheckFailed(ILogger logger, Guid monitorId, Exception exception);

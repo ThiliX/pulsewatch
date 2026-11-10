@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PulseWatch.IntegrationTests/PulseWatch.IntegrationTests.csproj" />
+    <Project Path="tests/PulseWatch.LoadTest/PulseWatch.LoadTest.csproj" />
     <Project Path="tests/PulseWatch.UnitTests/PulseWatch.UnitTests.csproj" />
   </Folder>
 </Solution>

@@ -25,9 +25,12 @@ internal sealed class NotificationOutboxConfiguration : IEntityTypeConfiguration
 
         builder.HasIndex(m => m.IdempotencyKey).IsUnique();
 
-        // The dispatcher only looks for messages that still need delivering.
+        // The dispatcher only looks at messages that still need delivering (including sends whose worker
+        // died). Sent and Exhausted rows are kept forever, so without this partial index every poll would
+        // scan the whole, ever-growing table.
         builder.HasIndex(m => m.NextAttemptAtUtc)
-            .HasFilter($"status IN ({(short)NotificationStatus.Pending}, {(short)NotificationStatus.Failed})")
+            .HasFilter(
+                $"status IN ({(short)NotificationStatus.Pending}, {(short)NotificationStatus.Sending}, {(short)NotificationStatus.Failed})")
             .HasDatabaseName("ix_notification_outbox_due");
 
         builder.HasIndex(m => m.IncidentId);
