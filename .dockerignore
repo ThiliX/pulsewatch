@@ -1,0 +1,20 @@
+# Keep the build context small and free of secrets.
+.git
+.github
+.vs
+.vscode
+.idea
+**/bin
+**/obj
+**/TestResults
+**/node_modules
+web/dist
+web/coverage
+tests
+docs
+backups
+.env
+.env.*
+!.env.example
+*.md
+!web/**/*.md

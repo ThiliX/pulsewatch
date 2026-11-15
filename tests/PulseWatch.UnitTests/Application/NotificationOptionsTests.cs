@@ -35,6 +35,20 @@ public class NotificationOptionsTests
         Assert.NotEmpty(Validate(new EmailOptions { FromAddress = "not-an-address" }));
 
     [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Blank_smtp_settings_from_an_env_file_count_as_not_set(string blank)
+    {
+        var options = new EmailOptions { Host = blank, Username = blank, Password = blank, FromAddress = blank };
+
+        Assert.Empty(Validate(options));
+        Assert.Null(options.Host);
+        Assert.Null(options.Username);
+        Assert.Null(options.Password);
+        Assert.Null(options.FromAddress);
+    }
+
+    [Theory]
     [InlineData("ftp://example.com")]
     [InlineData("/relative")]
     [InlineData("https://example.com/?token=abc")]

@@ -28,6 +28,8 @@ public class HttpProbeRunnerTests
         Assert.False(request.Headers.Contains("Cookie"));
         Assert.Null(request.Headers.Authorization);
         Assert.Null(request.Content);
+        Assert.Equal(HttpVersion.Version11, request.Version);
+        Assert.Equal(HttpVersionPolicy.RequestVersionOrLower, request.VersionPolicy);
     }
 
     [Fact]

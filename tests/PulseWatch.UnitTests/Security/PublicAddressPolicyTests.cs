@@ -44,6 +44,12 @@ public class PublicAddressPolicyTests
     [InlineData("fe80::1")]
     [InlineData("fec0::1")]
     [InlineData("ff02::1")]
+    [InlineData("2001:2::1")]              // benchmarking (inside 2001::/23)
+    [InlineData("2001:20::1")]             // ORCHIDv2
+    [InlineData("3fff::1")]                // documentation (RFC 9637)
+    [InlineData("5f00::1")]                // SRv6 SIDs
+    [InlineData("4000::1")]                // outside global unicast 2000::/3
+    [InlineData("1::1")]                   // unassigned, outside 2000::/3
     public void Blocks_non_public_addresses(string address) =>
         Assert.False(PublicAddressPolicy.IsPublic(IPAddress.Parse(address)));
 

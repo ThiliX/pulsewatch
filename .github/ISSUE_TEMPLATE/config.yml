@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/ThiliX/pulsewatch/security/advisories/new
+    about: Please report security problems privately, not as a public issue.
+  - name: Deployment guide
+    url: https://github.com/ThiliX/pulsewatch/blob/main/docs/deployment.md
+    about: Setup, upgrades, backups and the egress firewall.

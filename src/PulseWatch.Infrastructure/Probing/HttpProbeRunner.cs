@@ -20,6 +20,7 @@ namespace PulseWatch.Infrastructure.Probing;
 /// <item>One overall timeout covers connecting, redirects, headers and the (capped) body.</item>
 /// <item>No cookies, credentials or custom headers are ever sent.</item>
 /// <item>Redirects are followed manually (at most MaxRedirects) and every target is fully re-validated.</item>
+/// <item>HTTP/1.1 at most, so every connection goes through the SafeConnect address check.</item>
 /// <item>At most MaxResponseBytes of the body are read, then the rest is discarded.</item>
 /// <item>Failures become categorised results with fixed, safe summaries — never exception messages.</item>
 /// </list>
@@ -88,7 +89,13 @@ internal sealed partial class HttpProbeRunner(
 
         for (var redirects = 0; ; redirects++)
         {
-            using var message = new HttpRequestMessage(HttpMethod.Get, uri);
+            // HTTP/1.1 or lower only. HTTP/3 runs over QUIC, which does not go through SafeConnect's
+            // ConnectCallback, so an upgrade (for example via Alt-Svc) would skip the address check.
+            using var message = new HttpRequestMessage(HttpMethod.Get, uri)
+            {
+                Version = HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+            };
             message.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
             message.Headers.TryAddWithoutValidation("Accept", "*/*");
 

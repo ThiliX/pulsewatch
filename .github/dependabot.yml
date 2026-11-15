@@ -15,3 +15,12 @@ updates:
     directory: /
     schedule:
       interval: monthly
+  # Base images in Dockerfile (.NET SDK/runtime, Node) and the images in the compose files.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: monthly

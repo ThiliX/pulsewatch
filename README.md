@@ -4,29 +4,35 @@
 
 PulseWatch is an open-source, self-hostable tool that checks your HTTP APIs on a schedule, records status and response time, opens an incident when failures persist, emails you when it starts and when it recovers, and shows the history in a dashboard.
 
-> **Status: Milestone 7 (operations).** Sign up in the browser, add monitors, and watch their state, uptime, response times, check history and incidents. PulseWatch emails you when an incident opens and when it recovers. For operators it has metrics, structured logs, automatic cleanup of old checks, a demo-data command, and documented query plans and load-test results. The production release (hardening, Docker images, deployment guide) comes in Milestone 8. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full roadmap and [docs/progress.md](docs/progress.md) for what each milestone delivered.
+PulseWatch is built for small teams that want to own their monitoring: one VM, one `docker compose up`, no
+third-party service watching your endpoints. It was designed with security first, because a tool that sends
+requests to user-chosen URLs is a classic server-side request forgery (SSRF) target.
 
-## What works today
+![Dashboard](docs/screenshots/dashboard.jpg)
 
-| Area | State |
+| Monitor page | Incidents |
 |---|---|
-| .NET solution (Domain, Application, Infrastructure, Api, Worker + tests) | ✅ builds, dependency rules enforced by tests |
-| Domain model: monitors, checks, incidents, notification outbox | ✅ with the incident state machine (failure/recovery thresholds) unit-tested |
-| PostgreSQL schema via EF Core migrations | ✅ CHECK constraints, cascades, one-open-incident-per-monitor unique index |
-| API `/health/live` and `/health/ready` | ✅ readiness checks the database is reachable and fully migrated |
-| Accounts: register, sign in/out, `/me` | ✅ ASP.NET Core Identity, HttpOnly SameSite=Strict cookie, anti-forgery header, lockout, rate limits |
-| Monitor API: list, create, get, edit, pause, resume, check-now, delete | ✅ every query scoped to the signed-in user; quota; optimistic concurrency (ETag / If-Match) |
-| URL safety (SSRF layers 1–2) | ✅ http/https only, no credentials, allowed ports, local host names blocked, every DNS answer must be public |
-| Worker: scheduled checks | ✅ leases due monitors (`FOR UPDATE SKIP LOCKED`), probes with bounded concurrency, records one result per attempt, updates health, opens incidents, writes a heartbeat |
-| Probe engine | ✅ one GET per check (no retries), overall timeout, capped body read, manual redirects re-validated each hop, categorised outcomes |
-| SSRF layer 3 (connect-time check) | ✅ the probe resolves and checks the host itself and connects only to the address it checked, which blocks DNS rebinding |
-| PostgreSQL + Mailpit via Docker Compose | ✅ |
-| CI (format, build, test for .NET and React) | ✅ workflow defined |
-| Check history and incidents API | ✅ per-monitor check history (time window, paged), per-monitor and global incident lists, incident details with notification history |
-| Email alerts | ✅ one email when an incident opens and one when it recovers, written to an outbox in the same transaction as the incident; retries with backoff; delivery status on the incident |
-| Web app | ✅ sign up / sign in; dashboard with summary counts, open incidents and a "worker offline" banner; monitor list (cards on phones, table on wider screens) with state filter; add/edit form with server errors shown on the fields; monitor page with uptime and p95 for 24 h / 7 d / 30 d, a response-time chart, check history and incidents; pause, resume, check now and delete with confirmation; incident list and detail with timeline and email delivery status |
-| Uptime, p95 and chart data | ✅ sampled uptime (never "100 %" without data), p95 of successful checks, bucketed chart series, dashboard summary |
-| Operations | ✅ `PulseWatch` metrics meter with optional OTLP export, JSON logs with monitor/check/trace ids, daily cleanup of checks older than 30 days, `seed-demo` command, [query plan review](docs/query-plans.md), [load test](docs/load-test.md) |
+| ![Monitor page with uptime, p95 and response-time chart](docs/screenshots/monitor-detail.jpg) | ![Incident list](docs/screenshots/incidents.jpg) |
+
+## Features
+
+- **Scheduled HTTP checks** (every 1–60 min) with timeout, expected status range and redirect rules. One attempt
+  per check, so flaky endpoints stay visible.
+- **Incidents** that open after N failures in a row and resolve after M successes, so one blip doesn't wake you up.
+- **Email alerts** when an incident opens and when it recovers, sent through a transactional outbox with retries,
+  so a committed incident never loses its email.
+- **Dashboard and history**: state of every monitor, sampled uptime and p95 latency for 24 h / 7 d / 30 d,
+  response-time charts, check history, incident timelines with email delivery status.
+- **SSRF protection in four layers**: URL rules, public-address policy, connect-time address pinning (blocks DNS
+  rebinding) and a worker egress firewall. See the [threat model](docs/threat-model.md).
+- **Production deployment**: non-root chiseled images, Caddy with automatic HTTPS, isolated networks,
+  migration bundle, backup and restore scripts. See the [deployment guide](docs/deployment.md).
+- **Operations**: OpenTelemetry metrics and traces, JSON logs without secrets, automatic cleanup of old checks,
+  health endpoints.
+
+**Status:** all planned milestones (M0–M8) are complete; see [docs/progress.md](docs/progress.md) and
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). To try it, [run it locally](#getting-started) for development or
+[deploy it](#deploying-to-production) on a server.
 
 ## Architecture
 
@@ -34,13 +40,23 @@ A modular monolith with two executables sharing class libraries:
 
 ```mermaid
 flowchart LR
-  B[Browser - React SPA] -->|same origin| API[PulseWatch.Api]
-  API --> APP[Application]
+  B[Browser] -->|HTTPS| C[Caddy]
+  C -->|same origin| API["PulseWatch.Api<br/>(API + web app)"]
+  API --> DB[(PostgreSQL)]
+  W[PulseWatch.Worker] --> DB
+  W -->|"checks (firewalled egress)"| T[Monitored APIs]
+  W -->|SMTP| M[Mail server]
+```
+
+Inside, both executables share the same layers:
+
+```mermaid
+flowchart LR
+  API[PulseWatch.Api] --> APP[Application]
   W[PulseWatch.Worker] --> APP
   APP --> DOM[Domain]
   API --> INF[Infrastructure]
   W --> INF
-  INF --> DB[(PostgreSQL)]
 ```
 
 | Project | Responsibility | May reference |
@@ -120,6 +136,30 @@ cd web
 npm run lint; npm run typecheck; npm test; npm run build
 ```
 
+## Deploying to production
+
+The supported setup is one Linux VM with Docker Compose. The [deployment guide](docs/deployment.md) covers it
+step by step. In short:
+
+```bash
+cp .env.prod.example .env && chmod 600 .env    # fill in domain, database password, SMTP
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d db
+docker compose -f docker-compose.prod.yml run --rm migrate
+docker compose -f docker-compose.prod.yml up -d
+sudo ./deploy/egress-firewall.sh apply           # worker egress firewall (SSRF layer 4)
+```
+
+| Piece | What it is |
+|---|---|
+| `Dockerfile` | Multi-stage build with three targets: `api` (API + web app, ASP.NET chiseled), `worker` (.NET runtime chiseled), `migrations` (EF Core bundle). Non-root, no shell. |
+| `docker-compose.prod.yml` | Caddy, API, worker, PostgreSQL. Read-only containers, all capabilities dropped, three networks (`edge`, internal `backend`, `egress` for the worker only). |
+| `deploy/Caddyfile` | Automatic HTTPS with Let's Encrypt, HTTP→HTTPS redirect, compression for static files only. |
+| `deploy/egress-firewall.sh` | `DOCKER-USER` rules that stop the worker reaching private, local and metadata addresses. |
+| `deploy/backup.sh`, `deploy/restore-test.sh` | Nightly `pg_dump` with 14-day retention, and a restore check into a scratch database. |
+
+Registration is closed by default in production: you open it briefly to create your own account.
+
 ## Using the web app
 
 - **Dashboard**: counts of monitors by state, stale monitors and open incidents. A banner appears when the PulseWatch worker hasn't reported in for over a minute, so "my API is down" can be told apart from "PulseWatch's checker is down".
@@ -138,7 +178,7 @@ All endpoints are under `/api/v1`. Errors use [Problem Details](https://www.rfc-
 
 1. `GET /api/v1/auth/antiforgery` sets an `XSRF-TOKEN` cookie.
 2. Send that cookie's value in the `X-XSRF-TOKEN` header on **every** POST, PATCH and DELETE. A fresh token is issued after sign-in and sign-out.
-3. `POST /api/v1/auth/register` or `/login` with `{ "email": "...", "password": "..." }` sets the HttpOnly `pw.auth` cookie. Passwords need at least 12 characters.
+3. `POST /api/v1/auth/register` or `/login` with `{ "email": "...", "password": "..." }` sets the HttpOnly `pw.auth` cookie. Passwords need at least 12 characters. Register answers `403` while registration is closed (`Registration:Enabled=false`).
 4. Manage monitors: `GET/POST /api/v1/monitors`, `GET/PATCH/DELETE /api/v1/monitors/{id}`, `POST .../pause`, `.../resume`, `.../check-now`.
 5. Read results:
    - `GET /api/v1/monitors/{id}/checks?fromUtc=&toUtc=&page=&pageSize=` — newest first; defaults to the last 24 hours; a window can span at most the retention period (30 days).
@@ -248,7 +288,10 @@ dotnet ef migrations script --project src/PulseWatch.Infrastructure --startup-pr
 Applying migrations:
 
 - **Development:** `dotnet run --project src/PulseWatch.Api -- --migrate`
-- **Other environments:** build a migration bundle and run it as a separate deployment step, before starting the new version. The app never migrates automatically on startup.
+- **Production:** the `migrations` image contains an EF Core migration bundle; run it before starting a new
+  version with `docker compose -f docker-compose.prod.yml run --rm migrate` ([deployment guide §5](docs/deployment.md#5-upgrades-and-migrations)).
+  The app never migrates automatically on startup.
+- **Elsewhere:** build a bundle yourself and run it with the connection string:
 
   ```powershell
   dotnet ef migrations bundle --project src/PulseWatch.Infrastructure --startup-project src/PulseWatch.Api -o efbundle.exe
@@ -290,7 +333,11 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - Notification settings (sections `Notifications`, `Email`, `App`) are validated when the worker starts. With `Provider` set to `Smtp`, `Email:Host` and `Email:FromAddress` are required.
 - Monitoring settings (section `Monitoring`) are validated at startup. They can only narrow the hard limits in `MonitorLimits` (e.g. interval 60–3600 s), which the database also enforces.
 
-- The full list of settings is in [IMPLEMENTATION_PLAN.md §8](IMPLEMENTATION_PLAN.md#8-configuration).
+- Production-only settings: `Registration:Enabled` (default `true`; `docker-compose.prod.yml` sets it to `false`),
+  `ReverseProxy:KnownNetworks` (CIDR ranges whose `X-Forwarded-For`/`-Proto` headers are trusted; empty = not behind a proxy),
+  `DataProtection:KeysPath` (where the cookie-encryption keys are kept; set to a volume in containers).
+- Production configuration is listed in the [deployment guide §9](docs/deployment.md#9-configuration-reference); every
+  setting is in [IMPLEMENTATION_PLAN.md §8](IMPLEMENTATION_PLAN.md#8-configuration).
 
 ## Version decisions
 
@@ -304,15 +351,46 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - **PostgreSQL 18.6** (Alpine image) and **Mailpit 1.33.1** in Docker Compose.
 - Frontend: **React 19, Vite 8, TypeScript 7, Tailwind CSS 4, React Router 8, Vitest 5**, plus **TanStack Query 5.104**, **react-hook-form 7.91** with **zod 4.6**, **Recharts 3.10** (loaded only on monitor pages) and **MSW 3.0** for tests. New libraries were pinned to releases at least two weeks old. `@hookform/resolvers` was left out (its current release has conflicting optional dependencies); a 20-line zod adapter replaces it. Linting uses **oxlint**, which the current Vite template ships with, instead of ESLint.
 
+## Security
+
+- SSRF is handled in four layers (URL rules, public-address policy, connect-time pinning, egress firewall), with
+  no configuration switch that allows private addresses. Tests swap the policy through dependency injection only.
+- Cookie authentication (HttpOnly, Secure, SameSite=Strict) with anti-forgery tokens; every query is scoped to the
+  signed-in user, and other users' ids return the same 404 as missing ones.
+- Strict Content Security Policy (no inline scripts or styles), HSTS, `nosniff`, `no-referrer`, `frame-ancestors 'none'`.
+- No secrets in logs, Problem Details, emails or the repository.
+
+Read the [threat model](docs/threat-model.md) for what is covered and what is not. Report vulnerabilities privately
+as described in [SECURITY.md](SECURITY.md).
+
 ## Known limitations
 
-- Do not deploy publicly until the release checklist in Milestone 8 passes. In particular, the outbound firewall for the worker (SSRF layer 4) is a deployment step that isn't done yet.
-- Several workers can run safely (claiming is tested with 8 concurrent claimers), but run **one worker** until you have tested multiple replicas in your own deployment.
-- If an edit to a monitor lands at the exact moment the worker claims or records it, the edit gets `412` ("changed by another request") and must be retried.
-- Alert emails are delivered at least once: in rare crash timing an email can arrive twice (see [How email alerts work](#how-email-alerts-work)). Alerts go only to the monitor's owner.
-- Registration reveals whether an email is already registered (there is no email confirmation). The per-IP auth rate limit slows bulk checking.
-- Rate limits use the client IP; behind a reverse proxy, forwarded headers must be configured first (Milestone 8).
-- Data-protection keys (which sign the auth cookie) use the ASP.NET Core default store; in containers they must be persisted or users are signed out on restart (Milestone 8).
+- **Single location.** Checks run from one server, so a network problem near it looks like an outage.
+- **One worker recommended.** Several workers are safe (claims use `FOR UPDATE SKIP LOCKED`, tested with 8
+  concurrent claimers), but one handles hundreds of monitors; scale out only after testing in your deployment.
+- **At-least-once email.** In rare crash timing an alert email can arrive twice. Alerts go only to the monitor's owner.
+- **No MFA or email verification**, and registration reveals whether an email is already registered. Production
+  keeps registration closed, which removes most of the exposure.
+- **Blind SSRF signals remain.** A user learns whether a *public* host and port answer, and how fast. Don't put the
+  server's IP on any allow-list (see the [threat model](docs/threat-model.md#6-residual-risks)).
+- If an edit to a monitor lands at the exact moment the worker records it, the edit gets `412` and must be retried.
+- HTTP checks only (GET); no TCP, ping, keyword or TLS-expiry checks yet.
+
+## Roadmap
+
+Ideas for after 1.0, roughly in order of value. Contributions welcome.
+
+- More alert channels: webhooks, Slack, Microsoft Teams; several recipients per monitor.
+- TLS certificate expiry warnings and response keyword checks.
+- Public status pages.
+- Checks from more than one location, with "down from N of M locations" rules.
+- TOTP two-factor authentication and email verification.
+- Optional end-to-end tests (Playwright) in CI.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, coding rules and pull-request checklist, and
+the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

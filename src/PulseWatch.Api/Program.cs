@@ -6,6 +6,7 @@ using PulseWatch.Api.Auth;
 using PulseWatch.Api.Dashboard;
 using PulseWatch.Api.Errors;
 using PulseWatch.Api.Health;
+using PulseWatch.Api.Hosting;
 using PulseWatch.Api.Incidents;
 using PulseWatch.Api.Monitors;
 using PulseWatch.Api.OpenApi;
@@ -21,6 +22,7 @@ using PulseWatch.Infrastructure.Telemetry;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
 builder.Services
     .AddOptions<MonitoringOptions>()
@@ -40,7 +42,10 @@ builder.Services.AddSingleton(sp => new MonitorRequestValidator(
     sp.GetRequiredService<IDestinationValidator>(),
     sp.GetRequiredService<IOptions<MonitoringOptions>>().Value));
 
-builder.Services.AddPulseWatchAuth(builder.Environment);
+builder.Services.AddPulseWatchReverseProxy(builder.Configuration);
+builder.Services.AddPulseWatchDataProtection(builder.Configuration);
+builder.Services.AddHsts(options => options.MaxAge = TimeSpan.FromDays(180));
+builder.Services.AddPulseWatchAuth(builder.Configuration, builder.Environment);
 builder.Services.AddPulseWatchRateLimiting(builder.Configuration);
 
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -63,6 +68,10 @@ if (SeedDemoCommand.IsRequested(args))
     return await SeedDemoCommand.RunAsync(app, Console.Out);
 }
 
+// Order matters: forwarded headers first (so scheme and client IP are right for everything after),
+// then security headers, so even error and static-file responses carry them.
+app.UsePulseWatchReverseProxy();
+app.UsePulseWatchSecurityHeaders(app.Environment);
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
@@ -74,9 +83,14 @@ if (app.Environment.IsDevelopment())
 else
 {
     app.UseHsts();
-    app.UseHttpsRedirection();
+
+    // Health probes come from inside the host (Docker, Caddy) over plain http; redirecting them would fail.
+    app.UseWhen(
+        context => !context.Request.Path.StartsWithSegments(HealthRoutes.Prefix, StringComparison.Ordinal),
+        branch => branch.UseHttpsRedirection());
 }
 
+app.UsePulseWatchStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -95,6 +109,7 @@ app.MapMonitorEndpoints();
 app.MapMonitorHistoryEndpoints();
 app.MapIncidentEndpoints();
 app.MapDashboardEndpoints();
+app.MapPulseWatchSpaFallback();
 
 await app.RunAsync();
 return 0;

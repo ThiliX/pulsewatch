@@ -16,8 +16,11 @@ internal static class AuthSetup
     /// <summary>JS-readable cookie holding the request token the SPA copies into <see cref="XsrfHeaderName"/>.</summary>
     public const string XsrfCookieName = "XSRF-TOKEN";
 
-    public static IServiceCollection AddPulseWatchAuth(this IServiceCollection services, IHostEnvironment environment)
+    public static IServiceCollection AddPulseWatchAuth(
+        this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
+        services.AddOptions<RegistrationOptions>().Bind(configuration.GetSection(RegistrationOptions.SectionName));
+
         // Cookies are Secure everywhere except Development, where the API runs on plain http://localhost.
         var securePolicy = environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
 

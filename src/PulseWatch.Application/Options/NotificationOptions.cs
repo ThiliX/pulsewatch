@@ -50,23 +50,26 @@ public sealed class EmailOptions
     public const string SectionName = "Email";
 
     [StringLength(253)]
-    public string? Host { get; set; }
+    public string? Host { get; set => field = Blank(value); }
 
     [Range(1, 65535)]
     public int Port { get; set; } = 587;
 
     [StringLength(256)]
-    public string? Username { get; set; }
+    public string? Username { get; set => field = Blank(value); }
 
     [StringLength(512)]
-    public string? Password { get; set; }
+    public string? Password { get; set => field = Blank(value); }
 
     [EmailAddress]
     [StringLength(256)]
-    public string? FromAddress { get; set; }
+    public string? FromAddress { get; set => field = Blank(value); }
 
     [StringLength(100)]
     public string FromName { get; set; } = "PulseWatch";
+
+    // An empty environment variable (e.g. SMTP_USERNAME= in .env) means "not set", not "an empty value".
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     /// <summary>
     /// true (default): require STARTTLS. false: plain connection, for a local test server such as Mailpit.

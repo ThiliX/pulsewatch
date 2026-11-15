@@ -62,3 +62,22 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Builds every production target so a broken Dockerfile is caught before release. Nothing is pushed.
+      - name: Build api, worker and migrations images
+        run: |
+          docker build --target api -t pulsewatch-api:ci .
+          docker build --target worker -t pulsewatch-worker:ci .
+          docker build --target migrations -t pulsewatch-migrations:ci .
+
+      - name: Check the compose file
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod.example config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-only-placeholder
