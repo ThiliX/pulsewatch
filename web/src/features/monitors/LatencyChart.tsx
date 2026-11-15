@@ -93,7 +93,15 @@ export function LatencyChart({ series }: { series: CheckSeries }) {
                   ? [String(value), name]
                   : [formatMs(typeof value === 'number' ? value : null), name]
               }
-              contentStyle={{ fontSize: 12 }}
+              // System colours follow the page's light/dark scheme (Recharts defaults to a white box).
+              contentStyle={{
+                fontSize: 12,
+                backgroundColor: 'Canvas',
+                color: 'CanvasText',
+                borderColor: 'rgb(100 116 139 / 0.5)',
+                borderRadius: 6,
+              }}
+              labelStyle={{ color: 'inherit', fontWeight: 600 }}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Bar yAxisId="failures" dataKey="failures" name="Failures" fill="#be123c" barSize={4} />

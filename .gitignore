@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# PulseWatch: web build copied into the API (Docker does this), and local database backups
+src/PulseWatch.Api/wwwroot/
+backups/

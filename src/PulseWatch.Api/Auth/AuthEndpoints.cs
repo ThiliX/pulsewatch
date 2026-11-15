@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 using PulseWatch.Api.RateLimiting;
 using PulseWatch.Infrastructure.Identity;
 
@@ -37,7 +38,8 @@ internal static class AuthEndpoints
             .RequireRateLimiting(RateLimitPolicies.Auth)
             .WithSummary("Create an account and sign in.")
             .Produces<MeResponse>(StatusCodes.Status201Created)
-            .ProducesValidationProblem();
+            .ProducesValidationProblem()
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPost("/login", LoginAsync)
             .RequireRateLimiting(RateLimitPolicies.Auth)
@@ -62,8 +64,16 @@ internal static class AuthEndpoints
         UserManager<ApplicationUser> users,
         SignInManager<ApplicationUser> signIn,
         IAntiforgery antiforgery,
+        IOptions<RegistrationOptions> registration,
         TimeProvider time)
     {
+        if (!registration.Value.Enabled)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status403Forbidden,
+                title: "Registration is closed on this server. Ask the administrator for an account.");
+        }
+
         var errors = ValidateCredentials(request.Email, request.Password);
         if (errors.Count > 0)
         {

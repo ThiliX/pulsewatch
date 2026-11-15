@@ -15,7 +15,10 @@ namespace PulseWatch.IntegrationTests.Infrastructure;
 /// network: host names containing "private" resolve to 10.0.0.1, everything else to a public address.
 /// Rate limits are raised unless a test sets them, so they only trigger in the rate-limit tests.
 /// </summary>
-internal sealed class ApiFactory(string connectionString, IReadOnlyDictionary<string, string?>? settings = null)
+internal sealed class ApiFactory(
+    string connectionString,
+    IReadOnlyDictionary<string, string?>? settings = null,
+    Action<IServiceCollection>? configureServices = null)
     : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -34,6 +37,7 @@ internal sealed class ApiFactory(string connectionString, IReadOnlyDictionary<st
         {
             services.RemoveAll<IDnsResolver>();
             services.AddSingleton<IDnsResolver, FakeDns>();
+            configureServices?.Invoke(services);
         });
     }
 

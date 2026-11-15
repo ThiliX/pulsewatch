@@ -1,0 +1,46 @@
+name: Bug report
+description: Something doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security problems go through private reporting instead** (see SECURITY.md), not here.
+        Please remove passwords, tokens and private URLs from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a monitor for https://example.com/ with ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How do you run PulseWatch?
+      options:
+        - docker-compose.prod.yml (production)
+        - Local development (dotnet run + npm run dev)
+        - Something else (describe below)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v1.0.0 or a commit hash
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: From `docker compose -f docker-compose.prod.yml logs api worker`. Check them for secrets first.
+      render: text

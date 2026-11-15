@@ -4,8 +4,9 @@ import { afterAll, afterEach, beforeAll } from 'vitest'
 import { server } from './server.ts'
 
 // The first render of a page can include loading a large lazy module (the chart library). The
-// default 1 s wait for findBy* queries is too tight on a busy machine or CI runner.
-configure({ asyncUtilTimeout: 5000 })
+// default 1 s wait for findBy* queries is too tight on a busy machine or CI runner. Keep it below
+// testTimeout in vite.config.ts.
+configure({ asyncUtilTimeout: 10_000 })
 
 // Any request without a handler fails the test, so no test silently depends on a real network.
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))

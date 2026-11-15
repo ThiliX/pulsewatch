@@ -279,3 +279,40 @@ The uptime, p95 and chart queries planned for M7 were already built in M6 (see a
   - **Seed demo:** run twice (data replaced, not doubled, new password); about 8,064 checks; 3 resolved incidents with 6 sent emails; all monitors Healthy; the printed credentials sign in; the dashboard and stats show the seeded outage. Refused (exit code 1, nothing printed) outside Development.
 - The integration suite ran 3 times in a row green; `dotnet format` is clean.
 - Manual: `seed-demo` against the local dev database applied the two new migrations and seeded 4 monitors, 8,064 checks and 3 incidents.
+
+## Milestone 8 — Hardening and open-source release (15 Nov 2026)
+
+**Security review** (against the OWASP SSRF cheat sheet; written up in [threat-model.md](threat-model.md))
+- The four SSRF layers held up. Two gaps were tightened:
+  - **IPv6 is now allow-list first:** only global unicast `2000::/3` can pass, then the reserved ranges inside it are removed. Added the rest of `2001::/23` (benchmarking, ORCHID), `3fff::/20` (documentation) and `5f00::/16` (SRv6). New special-purpose ranges outside `2000::/3` are blocked automatically.
+  - **Probes are pinned to HTTP/1.1.** HTTP/3 (QUIC) does not go through `SafeConnect`'s connect callback, so an upgrade would skip the address check. It was off by default before; now it can't be turned on by accident.
+- **Registration can be closed** (`Registration:Enabled`; 403 when off; existing users still sign in). `docker-compose.prod.yml` closes it by default, so a self-hosted server isn't an open URL checker.
+
+**Production hosting** (new `src/PulseWatch.Api/Hosting/`)
+- **Security headers** on every response: strict CSP (`default-src 'self'`, no `unsafe-*`, `frame-ancestors 'none'`), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, COOP/CORP. HSTS (180 days) and HTTPS redirect outside Development; health probes are not redirected. No `Server` header.
+- **Reverse proxy trust:** `X-Forwarded-For`/`-Proto` only from `ReverseProxy:KnownNetworks`, one hop. Before this, per-IP login rate limits behind Caddy would have been shared by every user.
+- **Data Protection keys** persisted to `DataProtection:KeysPath` (a volume in production). Before this, every container restart would have signed everyone out.
+- **The API serves the web app** from `wwwroot`: hashed `/assets/*` cached for a year, `index.html` always revalidated, client-side routes fall back to `index.html`, unknown `/api/*` and `/health/*` URLs stay Problem Details 404s.
+- Blank SMTP settings from an env file now count as "not set" (an empty `EMAIL_FROM` used to stop the worker at startup).
+
+**Docker and deployment**
+- `Dockerfile` with three targets: `api` (ASP.NET chiseled + web build), `worker` (.NET runtime chiseled), `migrations` (EF Core bundle). Non-root (UID 1654), no shell. Images: api 144 MB, worker 116 MB, migrations 169 MB.
+- `docker-compose.prod.yml`: Caddy (automatic HTTPS), API, worker, PostgreSQL, one-off `migrate`. Read-only root filesystems, all capabilities dropped, `no-new-privileges`, log rotation. Networks: `edge` (Caddy ↔ API), internal `backend` (no internet), `egress` (worker only, bridge `pw-egress`).
+- `deploy/egress-firewall.sh` (SSRF layer 4), `deploy/backup.sh`, `deploy/restore-test.sh`, `deploy/Caddyfile`, `.env.prod.example`.
+- Docs: [deployment.md](deployment.md) (setup, first account, upgrades and rollback, firewall with systemd unit, backups and restores, logs, configuration reference, limits), [threat-model.md](threat-model.md).
+- README rewritten for release (features, screenshots, architecture, production section, security, limitations, roadmap). `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue forms and PR template.
+- CI builds all three images and validates the compose file. Dependabot also watches Docker base images and compose images.
+
+**Verification**
+- **Tests:** 469 .NET tests (329 unit, 140 integration) and 40 frontend tests, all passing. New: 12 hosting tests (headers on API, health, 404 and app responses; SPA fallback and caching; API 404s never return HTML; forwarded headers trusted from the proxy network only; bad proxy config stops startup), closed registration, extra IPv6 ranges, HTTP/1.1 pinning, blank SMTP settings.
+- **Production stack on Docker Desktop:** built, migrated with the bundle and started. Through Caddy over HTTPS: all headers present, HTTP→HTTPS redirect, gzip on assets only, deep links, Problem Details 404s. HSTS and redirects checked from inside the edge network with a real host name. In the browser: registered, added a monitor, and the production worker checked `example.com` through the egress network (200 in 97 ms); no CSP violations; seeded demo data for the README screenshots.
+- **Egress firewall** tested in an isolated Docker-in-Docker host: a private LAN address and the Docker host are reachable without the rules and refused with them; public sites keep working; `PW_EGRESS_ALLOW` re-opens one address; `remove` restores everything.
+- **Backups:** `backup.sh` wrote a 240 KB dump; `restore-test.sh` restored it into a scratch database (8,076 checks) and dropped it.
+- **Clean clone:** a fresh clone plus these changes passed the CI steps in Linux containers and built all three images.
+
+**Fixed along the way**
+- The response-time chart tooltip was a white box with unreadable light text in dark mode; it now uses the page's colour scheme.
+- One monitor-page frontend test timed out on slow Linux runs (the first lazy load of the chart module). Element waits are now 10 s and the test limit 20 s; five Linux runs in a row passed.
+- The migration bundle needed `DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp` on the read-only filesystem; Npgsql's Kerberos probe is disabled in the production connection string (the slim images have no Kerberos library).
+
+**Left for later** (see the README roadmap): more alert channels, TLS-expiry and keyword checks, status pages, multiple locations, MFA.

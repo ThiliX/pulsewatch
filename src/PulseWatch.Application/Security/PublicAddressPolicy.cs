@@ -7,6 +7,8 @@ namespace PulseWatch.Application.Security;
 /// SSRF layer 2: decides whether an IP address is a public internet destination.
 /// Everything private, local, reserved, multicast or used for documentation is blocked,
 /// including IPv6 forms that can wrap an internal IPv4 address.
+/// IPv6 is checked allow-list first: only global unicast (2000::/3) can pass, then the reserved
+/// ranges inside it are removed. New IANA special-purpose ranges outside 2000::/3 are blocked automatically.
 /// </summary>
 public static class PublicAddressPolicy
 {
@@ -27,15 +29,19 @@ public static class PublicAddressPolicy
         "224.0.0.0/4",        // multicast
         "240.0.0.0/4");       // reserved, includes 255.255.255.255 broadcast
 
+    private static readonly IPNetwork GlobalUnicastV6 = IPNetwork.Parse("2000::/3");
+
     private static readonly IPNetwork[] BlockedV6 = Parse(
         "::/96",              // unspecified, loopback and deprecated IPv4-compatible addresses
         "::ffff:0:0/96",      // IPv4-mapped (normally unwrapped first; blocked here as a safety net)
         "64:ff9b::/96",       // NAT64, can wrap internal IPv4
         "64:ff9b:1::/48",     // local-use NAT64
         "100::/64",           // discard-only
-        "2001::/32",          // Teredo, can wrap internal IPv4
+        "2001::/23",          // IETF protocol assignments: Teredo 2001::/32 (can wrap internal IPv4), benchmarking, ORCHID
         "2001:db8::/32",      // documentation
         "2002::/16",          // 6to4, can wrap internal IPv4
+        "3fff::/20",          // documentation (RFC 9637)
+        "5f00::/16",          // SRv6 SIDs (RFC 9602)
         "fc00::/7",           // unique local (private)
         "fe80::/10",          // link-local
         "fec0::/10",          // deprecated site-local
@@ -53,7 +59,9 @@ public static class PublicAddressPolicy
         return address.AddressFamily switch
         {
             AddressFamily.InterNetwork => !BlockedV4.Any(network => network.Contains(address)),
-            AddressFamily.InterNetworkV6 => address.ScopeId == 0 && !BlockedV6.Any(network => network.Contains(address)),
+            AddressFamily.InterNetworkV6 => address.ScopeId == 0
+                && GlobalUnicastV6.Contains(address)
+                && !BlockedV6.Any(network => network.Contains(address)),
             _ => false,
         };
     }

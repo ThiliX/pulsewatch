@@ -77,7 +77,7 @@ internal static class RateLimitSetup
     private static RateLimitingOptions Limits(HttpContext context) =>
         context.RequestServices.GetRequiredService<IOptions<RateLimitingOptions>>().Value;
 
-    // Behind a reverse proxy this is the proxy's address until forwarded headers are configured (Milestone 8).
+    // Behind a reverse proxy this is the real client address once ReverseProxy:KnownNetworks is set.
     private static string ClientIp(HttpContext context) =>
         "ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
 

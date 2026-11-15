@@ -20,5 +20,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     restoreMocks: true,
+    // Must stay above the 10 s findBy* timeout in src/test/setup.ts: the first test that loads the lazy
+    // chart module can need several seconds on a slow runner, and the default 5 s test timeout then
+    // fired before the element query could finish.
+    testTimeout: 20_000,
   },
 })

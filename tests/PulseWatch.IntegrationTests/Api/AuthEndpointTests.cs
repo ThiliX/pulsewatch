@@ -49,6 +49,29 @@ public class AuthEndpointTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Register_is_refused_when_registration_is_closed_but_existing_users_can_sign_in()
+    {
+        var database = await postgres.CreateDatabaseAsync();
+        await using (var open = new ApiFactory(database))
+        {
+            using var existing = await open.CreateSignedInClientAsync("owner@example.com");
+        }
+
+        await using var closed = new ApiFactory(database, new Dictionary<string, string?> { ["Registration:Enabled"] = "false" });
+        using var client = await closed.CreateTestClientAsync();
+
+        using var register = await client.Http.PostAsJsonAsync(
+            "/api/v1/auth/register", new { email = "stranger@example.com", password = TestClient.Password }, Ct);
+        Assert.Equal(HttpStatusCode.Forbidden, register.StatusCode);
+        var problem = await register.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Contains("Registration is closed", problem.GetProperty("title").GetString(), StringComparison.Ordinal);
+
+        using var login = await client.Http.PostAsJsonAsync(
+            "/api/v1/auth/login", new { email = "owner@example.com", password = TestClient.Password }, Ct);
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+    }
+
+    [Fact]
     public async Task Register_with_an_existing_email_fails_without_creating_a_second_account()
     {
         await using var factory = await CreateFactoryAsync();
