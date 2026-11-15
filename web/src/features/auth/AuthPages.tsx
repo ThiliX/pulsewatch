@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Activity, BellRing, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router'
@@ -7,6 +8,8 @@ import { login, register, type Credentials } from '../../api/endpoints.ts'
 import { queryKeys } from '../../api/queryKeys.ts'
 import { Button } from '../../components/Button.tsx'
 import { Field, FormError } from '../../components/Field.tsx'
+import { linkText } from '../../components/styles.ts'
+import { Logo } from '../../components/ui.tsx'
 import { LoadingBlock } from '../../components/States.tsx'
 import { applyServerErrors } from '../../lib/serverErrors.ts'
 import { zodResolver } from '../../lib/zodResolver.ts'
@@ -42,16 +45,79 @@ const registerSchema = z
 
 type Mode = 'login' | 'register'
 
-function AuthLayout({ title, children }: { title: string; children: ReactNode }) {
+const HIGHLIGHTS: { icon: LucideIcon; title: string; text: string }[] = [
+  {
+    icon: Activity,
+    title: 'Scheduled HTTP checks',
+    text: 'Every minute or hour, with timeouts, expected status codes and safe redirects.',
+  },
+  {
+    icon: BellRing,
+    title: 'Alerts that mean something',
+    text: 'Incidents open after repeated failures; you get one email when it breaks and one when it recovers.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Secure by design',
+    text: 'Four layers of SSRF protection, cookie auth and a strict Content Security Policy.',
+  },
+]
+
+function AuthLayout({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string
+  subtitle: string
+  children: ReactNode
+}) {
   return (
-    <div className="mx-auto mt-6 w-full max-w-sm">
-      <div className="mb-6 flex items-center justify-center gap-2 text-lg font-semibold">
-        <img src="/favicon.svg" alt="" className="h-8 w-8" />
-        PulseWatch
+    <div className="flex min-h-screen">
+      <div className="relative hidden w-[44%] max-w-xl flex-col justify-between overflow-hidden bg-zinc-950 p-10 text-white lg:flex">
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.35),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(16,185,129,0.15),transparent_50%)]"
+        />
+        <div className="relative flex items-center gap-2.5">
+          <Logo />
+          <span className="text-lg font-semibold tracking-tight">PulseWatch</span>
+        </div>
+        <div className="relative space-y-8">
+          <p className="text-3xl leading-tight font-semibold tracking-tight">
+            Know when your APIs fail,
+            <br />
+            <span className="text-indigo-300">and understand why.</span>
+          </p>
+          <ul className="space-y-5">
+            {HIGHLIGHTS.map(({ icon: Icon, title: t, text }) => (
+              <li key={t} className="flex gap-3.5">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/10 ring-1 ring-white/15">
+                  <Icon aria-hidden="true" className="size-4.5 text-indigo-200" />
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold">{t}</span>
+                  <span className="block text-sm text-zinc-400">{text}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="relative text-xs text-zinc-500">Open-source, self-hosted API monitoring.</p>
       </div>
-      <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h1 className="mb-4 text-xl font-semibold">{title}</h1>
-        {children}
+
+      <div className="flex flex-1 items-center justify-center px-4 py-12 sm:px-8">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
+            <Logo />
+            <span className="text-lg font-semibold tracking-tight">PulseWatch</span>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-white">
+            {title}
+          </h1>
+          <p className="mt-1.5 mb-8 text-sm text-zinc-500 dark:text-zinc-400">{subtitle}</p>
+          {children}
+        </div>
       </div>
     </div>
   )
@@ -76,7 +142,11 @@ function useAlreadySignedIn() {
     return <Navigate to={safeReturnTo(params.get('returnTo'))} replace />
   }
   if (me.isPending) {
-    return <LoadingBlock label="Checking your session" rows={2} />
+    return (
+      <div className="mx-auto max-w-md p-8">
+        <LoadingBlock label="Checking your session" rows={2} />
+      </div>
+    )
   }
   return null
 }
@@ -102,10 +172,10 @@ export function LoginPage() {
   const returnTo = params.get('returnTo')
 
   return (
-    <AuthLayout title="Sign in">
+    <AuthLayout title="Sign in" subtitle="Welcome back. Sign in to your monitors.">
       <form
         noValidate
-        className="space-y-4"
+        className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           setFormError(undefined)
           mutation.mutate(values)
@@ -155,10 +225,10 @@ export function RegisterPage() {
   if (redirect) return redirect
 
   return (
-    <AuthLayout title="Create an account">
+    <AuthLayout title="Create an account" subtitle="Start monitoring your APIs in a minute.">
       <form
         noValidate
-        className="space-y-4"
+        className="space-y-5"
         onSubmit={form.handleSubmit(({ email: e, password }) => {
           setFormError(undefined)
           mutation.mutate({ email: e, password })
@@ -199,24 +269,18 @@ export function RegisterPage() {
 function AuthSwitch({ mode, returnTo }: { mode: Mode; returnTo: string | null }) {
   const suffix = returnTo ? `?returnTo=${encodeURIComponent(safeReturnTo(returnTo))}` : ''
   return (
-    <p className="mt-4 text-center text-sm text-slate-600 dark:text-slate-400">
+    <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
       {mode === 'login' ? (
         <>
           New to PulseWatch?{' '}
-          <Link
-            className="font-medium text-sky-700 underline dark:text-sky-400"
-            to={`/register${suffix}`}
-          >
+          <Link className={linkText} to={`/register${suffix}`}>
             Create an account
           </Link>
         </>
       ) : (
         <>
           Already have an account?{' '}
-          <Link
-            className="font-medium text-sky-700 underline dark:text-sky-400"
-            to={`/login${suffix}`}
-          >
+          <Link className={linkText} to={`/login${suffix}`}>
             Sign in
           </Link>
         </>

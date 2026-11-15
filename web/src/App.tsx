@@ -1,21 +1,35 @@
+import { lazy } from 'react'
 import { Route, Routes } from 'react-router'
 import { AppLayout } from './components/AppLayout.tsx'
 import { LoginPage, RegisterPage } from './features/auth/AuthPages.tsx'
 import { RequireAuth } from './features/auth/RequireAuth.tsx'
 import { DashboardPage } from './features/dashboard/DashboardPage.tsx'
-import { IncidentDetailPage, IncidentListPage } from './features/incidents/IncidentPages.tsx'
 import { MonitorDetailPage } from './features/monitors/MonitorDetailPage.tsx'
-import { MonitorEditPage, MonitorNewPage } from './features/monitors/MonitorEditPages.tsx'
 import { MonitorListPage } from './features/monitors/MonitorListPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
+
+// Less-visited pages load on demand, keeping the first download small.
+const IncidentListPage = lazy(() =>
+  import('./features/incidents/IncidentPages.tsx').then((m) => ({ default: m.IncidentListPage })),
+)
+const IncidentDetailPage = lazy(() =>
+  import('./features/incidents/IncidentPages.tsx').then((m) => ({ default: m.IncidentDetailPage })),
+)
+const MonitorNewPage = lazy(() =>
+  import('./features/monitors/MonitorEditPages.tsx').then((m) => ({ default: m.MonitorNewPage })),
+)
+const MonitorEditPage = lazy(() =>
+  import('./features/monitors/MonitorEditPages.tsx').then((m) => ({ default: m.MonitorEditPage })),
+)
 
 export default function App() {
   return (
     <Routes>
-      <Route element={<AppLayout />}>
-        <Route path="login" element={<LoginPage />} />
-        <Route path="register" element={<RegisterPage />} />
-        <Route element={<RequireAuth />}>
+      {/* The sign-in pages have their own full-screen layout. */}
+      <Route path="login" element={<LoginPage />} />
+      <Route path="register" element={<RegisterPage />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<AppLayout />}>
           <Route index element={<DashboardPage />} />
           <Route path="monitors" element={<MonitorListPage />} />
           <Route path="monitors/new" element={<MonitorNewPage />} />

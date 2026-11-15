@@ -1,4 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CircleCheck, CircleX, Globe, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { errorMessage, isApiError } from '../../api/client.ts'
@@ -14,7 +15,7 @@ import {
 } from '../../api/endpoints.ts'
 import { queryKeys } from '../../api/queryKeys.ts'
 import type { Monitor, StatsWindowName } from '../../api/types.ts'
-import { Button, ButtonLink } from '../../components/Button.tsx'
+import { Button, ButtonLink, SegmentedControl } from '../../components/Button.tsx'
 import { ConfirmDialog } from '../../components/ConfirmDialog.tsx'
 import {
   ErrorState,
@@ -24,11 +25,14 @@ import {
   PageHeader,
   Pagination,
 } from '../../components/States.tsx'
+import { divider, mutedText, quietLink } from '../../components/styles.ts'
 import { useToast } from '../../components/toastContext.ts'
+import { Panel, Th } from '../../components/ui.tsx'
 import { describeOutcome, displayUrl, formatInterval, formatMs } from '../../lib/format.ts'
 import { formatDuration } from '../../lib/time.ts'
 import { StatTiles } from './StatTiles.tsx'
 import { IncidentStatusBadge, StaleBadge, StatusBadge } from './StatusBadge.tsx'
+import { UptimeBar } from './UptimeBar.tsx'
 
 // The chart library is large; load it only when a monitor page is opened.
 const LatencyChart = lazy(() =>
@@ -84,23 +88,35 @@ export function MonitorDetailPage() {
 
   const m = monitor.data.monitor
   return (
-    <div className="space-y-8">
-      <PageHeader title={m.name} actions={<MonitorActions monitor={m} />}>
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge state={m.state} />
-          {m.isStale && <StaleBadge />}
-          <span className="break-all">{displayUrl(m.url)}</span>
+    <div className="space-y-6">
+      <PageHeader
+        title={m.name}
+        back={{ to: '/monitors', label: 'Monitors' }}
+        actions={<MonitorActions monitor={m} />}
+      >
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="flex items-center gap-1">
+            <StatusBadge state={m.state} />
+            {m.isStale && <StaleBadge />}
+          </span>
+          <span className="inline-flex min-w-0 items-center gap-1.5 break-all">
+            <Globe aria-hidden="true" className="size-3.5 shrink-0" />
+            {displayUrl(m.url)}
+          </span>
         </div>
-        <div className="mt-1">
+        <div className="mt-2">
           <LastUpdated updatedAt={monitor.dataUpdatedAt} refreshFailed={monitor.isError} />
         </div>
       </PageHeader>
 
-      <MonitorFacts monitor={m} />
+      <Availability id={id} />
       <Stats id={id} />
       <Chart id={id} />
-      <ChecksSection id={id} />
-      <IncidentsSection id={id} />
+      <MonitorFacts monitor={m} />
+      <div className="grid gap-6 xl:grid-cols-5">
+        <ChecksSection id={id} className="xl:col-span-3" />
+        <IncidentsSection id={id} className="xl:col-span-2" />
+      </div>
     </div>
   )
 }
@@ -166,16 +182,22 @@ function MonitorActions({ monitor }: { monitor: Monitor }) {
         disabled={paused || action.isPending}
         title={paused ? 'Resume the monitor to run a check.' : undefined}
       >
+        <RefreshCw aria-hidden="true" />
         Check now
       </Button>
       <Button
         onClick={() => action.mutate(paused ? 'resume' : 'pause')}
         disabled={action.isPending}
       >
+        {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
         {paused ? 'Resume' : 'Pause'}
       </Button>
-      <ButtonLink to={`/monitors/${monitor.id}/edit`}>Edit</ButtonLink>
+      <ButtonLink to={`/monitors/${monitor.id}/edit`}>
+        <Pencil aria-hidden="true" />
+        Edit
+      </ButtonLink>
       <Button variant="danger" onClick={() => setConfirmDelete(true)}>
+        <Trash2 aria-hidden="true" />
         Delete
       </Button>
       <ConfirmDialog
@@ -190,6 +212,34 @@ function MonitorActions({ monitor }: { monitor: Monitor }) {
         can't be undone.
       </ConfirmDialog>
     </>
+  )
+}
+
+/** The 24-hour status bar. Shares its data with the 24h chart, so no extra request. */
+function Availability({ id }: { id: string }) {
+  const series = useQuery({
+    queryKey: queryKeys.monitorSeries(id, '24h'),
+    queryFn: ({ signal }) => getCheckSeries(id, '24h', signal),
+    refetchInterval: REFRESH_MS,
+  })
+  return (
+    <Panel
+      title="Availability"
+      titleId="availability-heading"
+      description="Last 24 hours, in 30-minute segments"
+    >
+      {series.isPending ? (
+        <LoadingBlock label="Loading availability" rows={1} />
+      ) : series.isError && !series.data ? (
+        <ErrorState
+          title="Couldn't load availability"
+          error={series.error}
+          onRetry={() => void series.refetch()}
+        />
+      ) : (
+        <UptimeBar series={series.data} />
+      )}
+    </Panel>
   )
 }
 
@@ -226,14 +276,18 @@ function MonitorFacts({ monitor }: { monitor: Monitor }) {
     },
   ]
   return (
-    <dl className="grid gap-x-6 gap-y-3 rounded-lg border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2 dark:border-slate-800 dark:bg-slate-900">
-      {facts.map((f) => (
-        <div key={f.label}>
-          <dt className="text-slate-600 dark:text-slate-400">{f.label}</dt>
-          <dd className="font-medium">{f.value}</dd>
-        </div>
-      ))}
-    </dl>
+    <Panel title="Configuration" titleId="configuration-heading">
+      <dl className="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        {facts.map((f) => (
+          <div key={f.label}>
+            <dt className={`text-xs font-medium tracking-wide uppercase ${mutedText}`}>
+              {f.label}
+            </dt>
+            <dd className="mt-1 font-medium text-zinc-900 dark:text-zinc-100">{f.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </Panel>
   )
 }
 
@@ -256,7 +310,11 @@ function Stats({ id }: { id: string }) {
   return <StatTiles windows={stats.data.windows} />
 }
 
-const WINDOWS: StatsWindowName[] = ['24h', '7d', '30d']
+const WINDOWS: { value: StatsWindowName; label: string }[] = [
+  { value: '24h', label: '24h' },
+  { value: '7d', label: '7d' },
+  { value: '30d', label: '30d' },
+]
 
 function Chart({ id }: { id: string }) {
   const [window, setWindow] = useState<StatsWindowName>('24h')
@@ -268,24 +326,19 @@ function Chart({ id }: { id: string }) {
   })
 
   return (
-    <section aria-labelledby="chart-heading" className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="chart-heading" className="text-lg font-semibold">
-          Response time
-        </h2>
-        <div role="group" aria-label="Chart window" className="flex gap-1">
-          {WINDOWS.map((w) => (
-            <Button
-              key={w}
-              variant={w === window ? 'primary' : 'secondary'}
-              aria-pressed={w === window}
-              onClick={() => setWindow(w)}
-            >
-              {w}
-            </Button>
-          ))}
-        </div>
-      </div>
+    <Panel
+      title="Response time"
+      titleId="chart-heading"
+      description="Average and maximum of successful checks; failures as red bars"
+      actions={
+        <SegmentedControl
+          label="Chart window"
+          options={WINDOWS}
+          value={window}
+          onChange={setWindow}
+        />
+      }
+    >
       {series.isPending ? (
         <LoadingBlock label="Loading the chart" rows={1} />
       ) : series.isError && !series.data ? (
@@ -299,11 +352,11 @@ function Chart({ id }: { id: string }) {
           <LatencyChart series={series.data} />
         </Suspense>
       )}
-    </section>
+    </Panel>
   )
 }
 
-function ChecksSection({ id }: { id: string }) {
+function ChecksSection({ id, className = '' }: { id: string; className?: string }) {
   const [page, setPage] = useState(1)
   const checks = useQuery({
     queryKey: queryKeys.monitorChecks(id, page),
@@ -313,77 +366,86 @@ function ChecksSection({ id }: { id: string }) {
   })
 
   return (
-    <section aria-labelledby="checks-heading" className="space-y-3">
-      <h2 id="checks-heading" className="text-lg font-semibold">
-        Checks in the last 24 hours
-      </h2>
+    <Panel
+      title="Checks in the last 24 hours"
+      titleId="checks-heading"
+      className={className}
+      bodyClassName=""
+    >
       {checks.isPending ? (
-        <LoadingBlock label="Loading checks" />
+        <div className="p-5">
+          <LoadingBlock label="Loading checks" />
+        </div>
       ) : checks.isError && !checks.data ? (
-        <ErrorState
-          title="Couldn't load checks"
-          error={checks.error}
-          onRetry={() => void checks.refetch()}
-        />
+        <div className="p-5">
+          <ErrorState
+            title="Couldn't load checks"
+            error={checks.error}
+            onRetry={() => void checks.refetch()}
+          />
+        </div>
       ) : checks.data.items.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:text-slate-400">
-          No checks in the last 24 hours.
-        </p>
+        <p className={`p-8 text-center text-sm ${mutedText}`}>No checks in the last 24 hours.</p>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
               <caption className="sr-only">Recent checks, newest first</caption>
-              <thead className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              <thead className="border-b border-zinc-200 bg-zinc-50/60 dark:border-zinc-800 dark:bg-zinc-900/60">
                 <tr>
-                  <th scope="col" className="px-4 py-2">
-                    Time
-                  </th>
-                  <th scope="col" className="px-4 py-2">
-                    Result
-                  </th>
-                  <th scope="col" className="px-4 py-2">
-                    Duration
-                  </th>
+                  <Th>Time</Th>
+                  <Th>Result</Th>
+                  <Th className="text-right">Duration</Th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {checks.data.items.map((c) => (
-                  <tr key={c.id}>
-                    <td className="whitespace-nowrap px-4 py-2">
-                      <LocalTime iso={c.startedAtUtc} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <span aria-hidden="true">{c.outcome === 'Success' ? '✓ ' : '✕ '}</span>
-                      {describeOutcome(c.outcome, c.httpStatusCode)}
-                      {c.errorSummary &&
-                        c.outcome !== 'Success' &&
-                        c.outcome !== 'HttpStatusFailure' && (
-                          <span className="block text-xs text-slate-600 dark:text-slate-400">
+              <tbody className={divider}>
+                {checks.data.items.map((c) => {
+                  const ok = c.outcome === 'Success'
+                  return (
+                    <tr key={c.id}>
+                      <td className={`px-5 py-2.5 whitespace-nowrap ${mutedText}`}>
+                        <LocalTime iso={c.startedAtUtc} />
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          {ok ? (
+                            <CircleCheck aria-hidden="true" className="size-4 text-emerald-500" />
+                          ) : (
+                            <CircleX aria-hidden="true" className="size-4 text-rose-500" />
+                          )}
+                          {describeOutcome(c.outcome, c.httpStatusCode)}
+                        </span>
+                        {c.errorSummary && !ok && c.outcome !== 'HttpStatusFailure' && (
+                          <span className={`block pl-5.5 text-xs ${mutedText}`}>
                             {c.errorSummary}
                           </span>
                         )}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2">{formatMs(c.durationMs)}</td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-5 py-2.5 text-right whitespace-nowrap tabular-nums">
+                        {formatMs(c.durationMs)}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
-          <Pagination
-            label="Check pages"
-            page={page}
-            pageSize={CHECKS_PAGE_SIZE}
-            totalCount={checks.data.totalCount}
-            onPageChange={setPage}
-          />
+          <div className="border-t border-zinc-200 px-5 py-3 empty:hidden dark:border-zinc-800">
+            <Pagination
+              label="Check pages"
+              page={page}
+              pageSize={CHECKS_PAGE_SIZE}
+              totalCount={checks.data.totalCount}
+              onPageChange={setPage}
+            />
+          </div>
         </>
       )}
-    </section>
+    </Panel>
   )
 }
 
-function IncidentsSection({ id }: { id: string }) {
+function IncidentsSection({ id, className = '' }: { id: string; className?: string }) {
   const [page, setPage] = useState(1)
   const incidents = useQuery({
     queryKey: queryKeys.monitorIncidents(id, page),
@@ -393,49 +455,56 @@ function IncidentsSection({ id }: { id: string }) {
   })
 
   return (
-    <section aria-labelledby="monitor-incidents-heading" className="space-y-3">
-      <h2 id="monitor-incidents-heading" className="text-lg font-semibold">
-        Incidents
-      </h2>
+    <Panel
+      title="Incidents"
+      titleId="monitor-incidents-heading"
+      className={`self-start ${className}`}
+      bodyClassName=""
+    >
       {incidents.isPending ? (
-        <LoadingBlock label="Loading incidents" rows={2} />
+        <div className="p-5">
+          <LoadingBlock label="Loading incidents" rows={2} />
+        </div>
       ) : incidents.isError && !incidents.data ? (
-        <ErrorState
-          title="Couldn't load incidents"
-          error={incidents.error}
-          onRetry={() => void incidents.refetch()}
-        />
+        <div className="p-5">
+          <ErrorState
+            title="Couldn't load incidents"
+            error={incidents.error}
+            onRetry={() => void incidents.refetch()}
+          />
+        </div>
       ) : incidents.data.items.length === 0 ? (
-        <p className="text-sm text-slate-600 dark:text-slate-400">No incidents for this monitor.</p>
+        <p className={`p-8 text-center text-sm ${mutedText}`}>No incidents for this monitor.</p>
       ) : (
         <>
-          <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
+          <ul className={divider}>
             {incidents.data.items.map((i) => (
-              <li key={i.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-sm">
+              <li key={i.id} className="flex items-start gap-3 px-5 py-3.5 text-sm">
                 <IncidentStatusBadge status={i.status} />
-                <Link
-                  to={`/incidents/${i.id}`}
-                  className="font-medium underline-offset-2 hover:underline"
-                >
-                  <LocalTime iso={i.firstFailureAtUtc} />
-                </Link>
-                <span className="text-slate-600 dark:text-slate-400">
-                  {describeOutcome(i.openingOutcome, i.openingStatusCode)} ·{' '}
-                  {formatDuration(i.durationSeconds)}
-                  {i.status === 'Open' ? ' so far' : ''}
-                </span>
+                <div className="min-w-0">
+                  <Link to={`/incidents/${i.id}`} className={quietLink}>
+                    <LocalTime iso={i.firstFailureAtUtc} />
+                  </Link>
+                  <p className={`text-xs ${mutedText}`}>
+                    {describeOutcome(i.openingOutcome, i.openingStatusCode)} ·{' '}
+                    {formatDuration(i.durationSeconds)}
+                    {i.status === 'Open' ? ' so far' : ''}
+                  </p>
+                </div>
               </li>
             ))}
           </ul>
-          <Pagination
-            label="Incident pages"
-            page={page}
-            pageSize={INCIDENTS_PAGE_SIZE}
-            totalCount={incidents.data.totalCount}
-            onPageChange={setPage}
-          />
+          <div className="border-t border-zinc-200 px-5 py-3 empty:hidden dark:border-zinc-800">
+            <Pagination
+              label="Incident pages"
+              page={page}
+              pageSize={INCIDENTS_PAGE_SIZE}
+              totalCount={incidents.data.totalCount}
+              onPageChange={setPage}
+            />
+          </div>
         </>
       )}
-    </section>
+    </Panel>
   )
 }

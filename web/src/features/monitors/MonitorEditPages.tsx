@@ -14,8 +14,8 @@ export function MonitorNewPage() {
   const toast = useToast()
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <PageHeader title="Add monitor">
+    <div className="max-w-4xl space-y-6">
+      <PageHeader title="Add monitor" back={{ to: '/monitors', label: 'Monitors' }}>
         The first check runs within a few seconds of saving.
       </PageHeader>
       <MonitorForm
@@ -74,8 +74,11 @@ export function MonitorEditPage() {
   const { monitor: current, etag } = monitor.data
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <PageHeader title={`Edit ${current.name}`} />
+    <div className="max-w-4xl space-y-6">
+      <PageHeader
+        title={`Edit ${current.name}`}
+        back={{ to: `/monitors/${id}`, label: current.name }}
+      />
       <MonitorForm
         // Remount with fresh values after "Reload the latest version".
         key={current.version}

@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router'
 import App from './App.tsx'
 import { createQueryClient } from './api/queryClient.ts'
 import { ToastProvider } from './components/Toast.tsx'
+import '@fontsource-variable/inter'
 import './index.css'
 
 const root = document.getElementById('root')

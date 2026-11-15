@@ -1,9 +1,11 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { Activity, Filter, Plus } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 import { listMonitors } from '../../api/endpoints.ts'
 import { queryKeys } from '../../api/queryKeys.ts'
 import { MONITOR_STATES, type Monitor, type MonitorState } from '../../api/types.ts'
 import { ButtonLink } from '../../components/Button.tsx'
+import { Select } from '../../components/Field.tsx'
 import {
   EmptyState,
   ErrorState,
@@ -13,8 +15,10 @@ import {
   PageHeader,
   Pagination,
 } from '../../components/States.tsx'
+import { divider, linkText, mutedText, quietLink, surface } from '../../components/styles.ts'
+import { Th } from '../../components/ui.tsx'
 import { describeOutcome, displayUrl, formatInterval, formatMs } from '../../lib/format.ts'
-import { StaleBadge, StatusBadge } from './StatusBadge.tsx'
+import { StaleBadge, StatusBadge, StatusDot } from './StatusBadge.tsx'
 
 const PAGE_SIZE = 25
 
@@ -49,32 +53,45 @@ export function MonitorListPage() {
         title="Monitors"
         actions={
           <ButtonLink to="/monitors/new" variant="primary">
+            <Plus aria-hidden="true" />
             Add monitor
           </ButtonLink>
         }
       >
-        {monitors.data && (
+        {monitors.data ? (
           <LastUpdated updatedAt={monitors.dataUpdatedAt} refreshFailed={monitors.isError} />
+        ) : (
+          'Every endpoint PulseWatch checks for you.'
         )}
       </PageHeader>
 
-      <div className="flex items-center gap-2">
-        <label htmlFor="state-filter" className="text-sm font-medium">
-          State
-        </label>
-        <select
-          id="state-filter"
-          value={state ?? ''}
-          onChange={(e) => update({ state: parseState(e.target.value), page: 1 })}
-          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900"
-        >
-          <option value="">All</option>
-          {MONITOR_STATES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Filter aria-hidden="true" className={`size-4 ${mutedText}`} />
+          <label
+            htmlFor="state-filter"
+            className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+          >
+            State
+          </label>
+          <Select
+            id="state-filter"
+            value={state ?? ''}
+            onChange={(e) => update({ state: parseState(e.target.value), page: 1 })}
+          >
+            <option value="">All</option>
+            {MONITOR_STATES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {monitors.data && (
+          <p className={`text-sm ${mutedText}`}>
+            {monitors.data.totalCount} {monitors.data.totalCount === 1 ? 'monitor' : 'monitors'}
+          </p>
+        )}
       </div>
 
       {monitors.isPending ? (
@@ -88,19 +105,17 @@ export function MonitorListPage() {
       ) : monitors.data.items.length === 0 ? (
         state ? (
           <EmptyState title={`No ${state.toLowerCase()} monitors`}>
-            <button
-              type="button"
-              className="font-medium text-sky-700 underline dark:text-sky-400"
-              onClick={() => update({ state: undefined })}
-            >
+            <button type="button" className={linkText} onClick={() => update({ state: undefined })}>
               Show all monitors
             </button>
           </EmptyState>
         ) : (
           <EmptyState
             title="No monitors yet"
+            icon={Activity}
             action={
               <ButtonLink to="/monitors/new" variant="primary">
+                <Plus aria-hidden="true" />
                 Add your first monitor
               </ButtonLink>
             }
@@ -127,15 +142,23 @@ export function MonitorListPage() {
 
 function LastResult({ monitor }: { monitor: Monitor }) {
   if (!monitor.lastCheckedAtUtc || !monitor.lastOutcome) {
-    return <span className="text-slate-500 dark:text-slate-400">Not checked yet</span>
+    return <span className={mutedText}>Not checked yet</span>
   }
+  const ok = monitor.lastOutcome === 'Success'
   return (
     <span>
-      {describeOutcome(monitor.lastOutcome, monitor.lastStatusCode)}
-      {monitor.lastOutcome === 'Success' && ` · ${formatMs(monitor.lastDurationMs)}`}
-      <span className="block text-xs text-slate-500 dark:text-slate-400">
-        <LocalTime iso={monitor.lastCheckedAtUtc} relative />
+      <span
+        className={`font-medium tabular-nums ${ok ? 'text-zinc-900 dark:text-zinc-100' : 'text-rose-600 dark:text-rose-400'}`}
+      >
+        {ok
+          ? formatMs(monitor.lastDurationMs)
+          : describeOutcome(monitor.lastOutcome, monitor.lastStatusCode)}
       </span>
+      {ok && (
+        <span className={`ml-1.5 ${mutedText}`}>
+          {describeOutcome(monitor.lastOutcome, monitor.lastStatusCode)}
+        </span>
+      )}
     </span>
   )
 }
@@ -154,24 +177,22 @@ function MonitorCards({ monitors }: { monitors: Monitor[] }) {
   return (
     <ul className="space-y-3 md:hidden">
       {monitors.map((m) => (
-        <li
-          key={m.id}
-          className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <Link
-              to={`/monitors/${m.id}`}
-              className="font-medium underline-offset-2 hover:underline"
-            >
-              {m.name}
-            </Link>
+        <li key={m.id} className={`${surface} p-4`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <StatusDot state={m.state} />
+              <Link to={`/monitors/${m.id}`} className={`truncate text-sm ${quietLink}`}>
+                {m.name}
+              </Link>
+            </div>
             <Badges monitor={m} />
           </div>
-          <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-400">
-            {displayUrl(m.url)}
-          </p>
-          <div className="mt-2 text-sm">
+          <p className={`mt-1 truncate pl-5 text-xs ${mutedText}`}>{displayUrl(m.url)}</p>
+          <div className="mt-3 flex items-center justify-between pl-5 text-sm">
             <LastResult monitor={m} />
+            <span className={`text-xs ${mutedText}`}>
+              {m.lastCheckedAtUtc && <LocalTime iso={m.lastCheckedAtUtc} relative />}
+            </span>
           </div>
         </li>
       ))}
@@ -182,46 +203,44 @@ function MonitorCards({ monitors }: { monitors: Monitor[] }) {
 /** Wider screens: a table. */
 function MonitorTable({ monitors }: { monitors: Monitor[] }) {
   return (
-    <div className="hidden overflow-x-auto rounded-lg border border-slate-200 bg-white md:block dark:border-slate-800 dark:bg-slate-900">
-      <table className="w-full text-left text-sm">
+    <div className={`${surface} hidden overflow-x-auto md:block`}>
+      <table className="w-full text-sm">
         <caption className="sr-only">Your monitors</caption>
-        <thead className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <thead className="border-b border-zinc-200 bg-zinc-50/60 dark:border-zinc-800 dark:bg-zinc-900/60">
           <tr>
-            <th scope="col" className="px-4 py-2">
-              Name
-            </th>
-            <th scope="col" className="px-4 py-2">
-              State
-            </th>
-            <th scope="col" className="px-4 py-2">
-              Last result
-            </th>
-            <th scope="col" className="px-4 py-2">
-              Schedule
-            </th>
+            <Th>Name</Th>
+            <Th>State</Th>
+            <Th>Last result</Th>
+            <Th>Checked</Th>
+            <Th>Schedule</Th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+        <tbody className={divider}>
           {monitors.map((m) => (
-            <tr key={m.id}>
-              <td className="max-w-72 px-4 py-3">
-                <Link
-                  to={`/monitors/${m.id}`}
-                  className="font-medium underline-offset-2 hover:underline"
-                >
-                  {m.name}
-                </Link>
-                <span className="block truncate text-xs text-slate-600 dark:text-slate-400">
-                  {displayUrl(m.url)}
-                </span>
+            <tr key={m.id} className="transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+              <td className="max-w-80 px-5 py-3.5">
+                <div className="flex items-center gap-3">
+                  <StatusDot state={m.state} />
+                  <div className="min-w-0">
+                    <Link to={`/monitors/${m.id}`} className={`block truncate ${quietLink}`}>
+                      {m.name}
+                    </Link>
+                    <span className={`block truncate text-xs ${mutedText}`}>
+                      {displayUrl(m.url)}
+                    </span>
+                  </div>
+                </div>
               </td>
-              <td className="px-4 py-3">
+              <td className="px-5 py-3.5">
                 <Badges monitor={m} />
               </td>
-              <td className="px-4 py-3">
+              <td className="px-5 py-3.5 whitespace-nowrap">
                 <LastResult monitor={m} />
               </td>
-              <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
+              <td className={`px-5 py-3.5 whitespace-nowrap ${mutedText}`}>
+                {m.lastCheckedAtUtc ? <LocalTime iso={m.lastCheckedAtUtc} relative /> : '—'}
+              </td>
+              <td className={`px-5 py-3.5 whitespace-nowrap ${mutedText}`}>
                 {formatInterval(m.intervalSeconds)}
               </td>
             </tr>

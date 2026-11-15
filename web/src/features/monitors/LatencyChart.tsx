@@ -1,4 +1,5 @@
 import {
+  Area,
   Bar,
   CartesianGrid,
   ComposedChart,
@@ -45,7 +46,7 @@ export function LatencyChart({ series }: { series: CheckSeries }) {
 
   if (totalChecks === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:text-slate-400">
+      <p className="rounded-lg border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
         No checks in this window yet.
       </p>
     )
@@ -67,7 +68,7 @@ export function LatencyChart({ series }: { series: CheckSeries }) {
       <div className="h-64 w-full" role="img" aria-label={`Latency chart. ${summary}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} />
+            <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.1} />
             <XAxis
               dataKey="t"
               type="number"
@@ -81,7 +82,7 @@ export function LatencyChart({ series }: { series: CheckSeries }) {
               yAxisId="ms"
               tickFormatter={(v: number) => formatMs(v)}
               tick={{ fontSize: 12, fill: 'currentColor' }}
-              width={56}
+              width={68}
             />
             <YAxis yAxisId="failures" orientation="right" allowDecimals={false} hide />
             <Tooltip
@@ -104,15 +105,31 @@ export function LatencyChart({ series }: { series: CheckSeries }) {
               labelStyle={{ color: 'inherit', fontWeight: 600 }}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Bar yAxisId="failures" dataKey="failures" name="Failures" fill="#be123c" barSize={4} />
-            <Line
+            <Bar
+              yAxisId="failures"
+              dataKey="failures"
+              name="Failures"
+              fill="#f43f5e"
+              barSize={4}
+              radius={[2, 2, 0, 0]}
+            />
+            <defs>
+              <linearGradient id="avgFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#6366f1" stopOpacity={0.25} />
+                <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area
               yAxisId="ms"
               type="monotone"
               dataKey="avg"
               name="Average"
-              stroke="#0369a1"
+              stroke="#6366f1"
               strokeWidth={2}
-              dot={isolatedDot(rows, 'avg', '#0369a1')}
+              fill="url(#avgFill)"
+              dot={isolatedDot(rows, 'avg', '#6366f1')}
+              activeDot={{ r: 4 }}
+              animationDuration={500}
               connectNulls={false}
             />
             <Line
@@ -120,15 +137,16 @@ export function LatencyChart({ series }: { series: CheckSeries }) {
               type="monotone"
               dataKey="max"
               name="Maximum"
-              stroke="#64748b"
+              stroke="#a1a1aa"
+              animationDuration={500}
               strokeDasharray="4 3"
-              dot={isolatedDot(rows, 'max', '#64748b')}
+              dot={isolatedDot(rows, 'max', '#a1a1aa')}
               connectNulls={false}
             />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <figcaption className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+      <figcaption className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
         {summary} Latency counts successful checks only; gaps mean no successful check in that
         period.
       </figcaption>

@@ -1,3 +1,4 @@
+import { TriangleAlert } from 'lucide-react'
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { Button } from './Button.tsx'
 
@@ -65,22 +66,32 @@ export function ConfirmDialog({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm">
       <div
         ref={panelRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-slate-900"
+        className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
       >
-        <h2 id={titleId} className="text-lg font-semibold">
-          {title}
-        </h2>
-        <div id={descriptionId} className="mt-2 text-sm text-slate-700 dark:text-slate-300">
-          {children}
+        <div className="flex gap-4">
+          <span
+            aria-hidden="true"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400"
+          >
+            <TriangleAlert className="size-5" />
+          </span>
+          <div>
+            <h2 id={titleId} className="text-base font-semibold text-zinc-900 dark:text-white">
+              {title}
+            </h2>
+            <div id={descriptionId} className="mt-1.5 text-sm text-zinc-600 dark:text-zinc-400">
+              {children}
+            </div>
+          </div>
         </div>
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-6 flex justify-end gap-2">
           <Button ref={cancelRef} onClick={onCancel} disabled={busy}>
             Cancel
           </Button>

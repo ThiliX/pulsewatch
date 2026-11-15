@@ -8,15 +8,21 @@ export function RequireAuth() {
   const location = useLocation()
 
   if (me.isPending) {
-    return <LoadingBlock label="Checking your session" rows={2} />
+    return (
+      <div className="mx-auto max-w-md p-8">
+        <LoadingBlock label="Checking your session" rows={2} />
+      </div>
+    )
   }
   if (me.isError) {
     return (
-      <ErrorState
-        title="Couldn't check your session"
-        error={me.error}
-        onRetry={() => void me.refetch()}
-      />
+      <div className="mx-auto max-w-lg p-8">
+        <ErrorState
+          title="Couldn't check your session"
+          error={me.error}
+          onRetry={() => void me.refetch()}
+        />
+      </div>
     )
   }
   if (!me.data) {

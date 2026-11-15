@@ -10,9 +10,9 @@ requests to user-chosen URLs is a classic server-side request forgery (SSRF) tar
 
 ![Dashboard](docs/screenshots/dashboard.jpg)
 
-| Monitor page | Incidents |
+| Monitor page | Incident timeline |
 |---|---|
-| ![Monitor page with uptime, p95 and response-time chart](docs/screenshots/monitor-detail.jpg) | ![Incident list](docs/screenshots/incidents.jpg) |
+| ![Monitor page with uptime, p95 and response-time chart](docs/screenshots/monitor-detail.jpg) | ![Incident with timeline and email alerts](docs/screenshots/incidents.jpg) |
 
 ## Features
 

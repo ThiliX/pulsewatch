@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { renderApp } from '../../test/render.tsx'
-import { incident, paged, server, signedIn, summary } from '../../test/server.ts'
+import { incident, monitor, paged, server, signedIn, summary } from '../../test/server.ts'
 
 describe('dashboard', () => {
   it('shows summary counts and open incidents', async () => {
@@ -10,6 +10,9 @@ describe('dashboard', () => {
       ...signedIn(),
       http.get('*/api/v1/dashboard/summary', () => HttpResponse.json(summary({ stale: 2 }))),
       http.get('*/api/v1/incidents', () => HttpResponse.json(paged([incident()]))),
+      http.get('*/api/v1/monitors', () =>
+        HttpResponse.json(paged([monitor({ id: 'mon-2', name: 'Payments', state: 'Healthy' })])),
+      ),
     )
 
     renderApp('/')
@@ -24,6 +27,12 @@ describe('dashboard', () => {
     expect(open).toHaveAttribute('href', '/incidents/inc-1')
     expect(screen.getByText(/Unexpected status 503/)).toBeInTheDocument()
     expect(screen.queryByText(/worker is offline/)).not.toBeInTheDocument()
+
+    const overview = screen.getByRole('region', { name: 'Monitors' })
+    expect(await within(overview).findByRole('link', { name: 'Payments' })).toHaveAttribute(
+      'href',
+      '/monitors/mon-2',
+    )
   })
 
   it('warns when the PulseWatch worker is offline', async () => {
@@ -38,6 +47,7 @@ describe('dashboard', () => {
         ),
       ),
       http.get('*/api/v1/incidents', () => HttpResponse.json(paged([]))),
+      http.get('*/api/v1/monitors', () => HttpResponse.json(paged([]))),
     )
 
     renderApp('/')
@@ -54,6 +64,7 @@ describe('dashboard', () => {
         HttpResponse.json(summary({ totalMonitors: 0, healthy: 0, down: 0, openIncidents: 0 })),
       ),
       http.get('*/api/v1/incidents', () => HttpResponse.json(paged([]))),
+      http.get('*/api/v1/monitors', () => HttpResponse.json(paged([]))),
     )
 
     renderApp('/')
@@ -70,6 +81,7 @@ describe('dashboard', () => {
         return calls === 1 ? HttpResponse.error() : HttpResponse.json(summary())
       }),
       http.get('*/api/v1/incidents', () => HttpResponse.json(paged([]))),
+      http.get('*/api/v1/monitors', () => HttpResponse.json(paged([]))),
     )
     const { user } = renderApp('/')
 
