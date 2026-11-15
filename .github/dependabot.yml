@@ -7,10 +7,24 @@ updates:
     groups:
       dotnet-platform:
         patterns: ['Microsoft.*', 'System.*']
+      # Released together; mixed versions pull in a newer core library than the other packages expect.
+      opentelemetry:
+        patterns: ['OpenTelemetry*']
+    ignore:
+      # PulseWatch targets .NET 10 (LTS). Major platform versions (11.x) come with a planned upgrade of the
+      # SDK, runtime images and EF Core, not as a package bump. Patch and minor updates still arrive.
+      - dependency-name: 'Microsoft.*'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'System.*'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # Type definitions must match the Node.js major we run (24, see Dockerfile and CI).
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule:
