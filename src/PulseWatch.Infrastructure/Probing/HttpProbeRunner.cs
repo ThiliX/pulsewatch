@@ -14,7 +14,7 @@ using PulseWatch.Domain.Monitoring;
 namespace PulseWatch.Infrastructure.Probing;
 
 /// <summary>
-/// Runs one GET probe. Rules (IMPLEMENTATION_PLAN.md §4.1):
+/// Runs one GET probe. Rules:
 /// <list type="bullet">
 /// <item>Exactly one attempt per check: no retries, so transient failures stay visible and latency is honest.</item>
 /// <item>One overall timeout covers connecting, redirects, headers and the (capped) body.</item>

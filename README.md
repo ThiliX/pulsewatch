@@ -30,8 +30,8 @@ requests to user-chosen URLs is a classic server-side request forgery (SSRF) tar
 - **Operations**: OpenTelemetry metrics and traces, JSON logs without secrets, automatic cleanup of old checks,
   health endpoints.
 
-**Status:** all planned milestones (M0–M8) are complete; see [docs/progress.md](docs/progress.md) and
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). To try it, [run it locally](#getting-started) for development or
+**Status:** all planned milestones (M0–M8) are complete; see [docs/progress.md](docs/progress.md) and the
+[demo script](docs/demo-script.md). To try it, [run it locally](#getting-started) for development or
 [deploy it](#deploying-to-production) on a server.
 
 ## Architecture
@@ -336,8 +336,7 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 - Production-only settings: `Registration:Enabled` (default `true`; `docker-compose.prod.yml` sets it to `false`),
   `ReverseProxy:KnownNetworks` (CIDR ranges whose `X-Forwarded-For`/`-Proto` headers are trusted; empty = not behind a proxy),
   `DataProtection:KeysPath` (where the cookie-encryption keys are kept; set to a volume in containers).
-- Production configuration is listed in the [deployment guide §9](docs/deployment.md#9-configuration-reference); every
-  setting is in [IMPLEMENTATION_PLAN.md §8](IMPLEMENTATION_PLAN.md#8-configuration).
+- Production configuration is listed in the [deployment guide §9](docs/deployment.md#9-configuration-reference).
 
 ## Version decisions
 

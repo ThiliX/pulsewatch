@@ -219,7 +219,7 @@ public sealed class EndpointMonitor
 
     /// <summary>
     /// The incident state machine. Updates counters and state from one check result and opens or
-    /// resolves an incident when a threshold is reached. Rules (see IMPLEMENTATION_PLAN.md §4.3):
+    /// resolves an incident when a threshold is reached. Rules:
     /// <list type="bullet">
     /// <item>Paused monitor: the result is recorded but counters and incidents are untouched.</item>
     /// <item>Success: resets the failure streak; resolves the open incident after RecoveryThreshold successes in a row.</item>
