@@ -342,12 +342,12 @@ CI runs the same commands on every push and pull request (`.github/workflows/ci.
 ## Version decisions
 
 - **.NET 10 LTS**, SDK pinned to the 10.0.400 band with `rollForward: latestFeature`.
-- **Microsoft.\* packages pinned to 10.0.11** to match the installed ASP.NET Core runtime. Dependabot groups patch updates for these.
+- **Microsoft.\* packages on 10.0.15** (.NET 10 patch releases). Dependabot groups their updates and skips new major versions (.NET 11), which need a planned upgrade.
 - Package versions live in one place: `Directory.Packages.props` (central package management).
-- **EF Core 10.0.11** with **Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3** and snake_case naming (EFCore.NamingConventions).
+- **EF Core 10.0.15** with **Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3** and snake_case naming (EFCore.NamingConventions).
 - **xUnit v3** with Microsoft.Testing.Platform; **Testcontainers 4.16** for database tests.
-- **Scalar.AspNetCore 2.18.7** for the Development API reference page.
-- **MailKit 4.18.2** for SMTP.
+- **Scalar.AspNetCore 2.21.0** for the Development API reference page.
+- **MailKit 5.0.0** for SMTP.
 - **PostgreSQL 18.6** (Alpine image) and **Mailpit 1.33.1** in Docker Compose.
 - Frontend: **React 19, Vite 8, TypeScript 7, Tailwind CSS 4, React Router 8, Vitest 5**, plus **TanStack Query 5.104**, **react-hook-form 7.91** with **zod 4.6**, **Recharts 3.10** (loaded only on monitor pages) and **MSW 3.0** for tests. New libraries were pinned to releases at least two weeks old. `@hookform/resolvers` was left out (its current release has conflicting optional dependencies); a 20-line zod adapter replaces it. Linting uses **oxlint**, which the current Vite template ships with, instead of ESLint.
 
